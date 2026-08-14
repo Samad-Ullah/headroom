@@ -30,7 +30,7 @@ from headroom.agent_savings import proxy_pipeline_kwargs
 from headroom.ccr.context_tracker import looks_like_claude_code_compact_summary
 from headroom.ccr.marker_resolution import (
     resolve_markers_in_response,
-    scrub_markers_for_client,
+    scrub_client_payload,
     strip_internal_retrieve_calls,
 )
 from headroom.copilot_auth import apply_copilot_api_auth, build_copilot_upstream_url
@@ -3637,16 +3637,26 @@ class AnthropicHandlerMixin:
                         "request carries no redeemable marker, so server-side "
                         "retrieval cannot fire; keeping the streaming path (#3071)"
                     )
-                buffered_stream_ccr = (
+                eligible_stream_ccr = (
                     wants_buffered_stream_ccr and not outbound_locked_to_client_bytes
                 )
+                event_stream_ccr = eligible_stream_ccr and getattr(
+                    self.config, "ccr_event_streaming", True
+                )
+                buffered_stream_ccr = eligible_stream_ccr and not event_stream_ccr
                 if wants_buffered_stream_ccr and outbound_locked_to_client_bytes:
                     logger.info(
                         f"[{request_id}] CCR: signed thinking blocks force byte-faithful "
                         "passthrough, so a stream:false flip could not reach upstream; "
                         "using the plain streaming path instead of buffered retrieval"
                     )
-                if buffered_stream_ccr:
+                if event_stream_ccr:
+                    logger.info(
+                        f"[{request_id}] CCR: stream:true request has "
+                        "headroom_retrieve available; using bounded event-level "
+                        "interception and continuation splicing"
+                    )
+                elif buffered_stream_ccr:
                     if body.get("stream") is not False:
                         body["stream"] = False
                         body_mutation_tracker.mark_mutated(
@@ -3656,9 +3666,7 @@ class AnthropicHandlerMixin:
                     # buffered boundary below, which every non-streaming
                     # request reaches — this one and the client's own (#3130).
                     logger.info(
-                        f"[{request_id}] CCR: stream:true request has "
-                        "headroom_retrieve available; using buffered stream:false "
-                        "upstream request for server-side retrieval handling"
+                        f"[{request_id}] CCR: using qualified buffered stream:false fallback"
                     )
 
                 # Last stop before the wire. Every transform, the tool sort, the
@@ -3811,6 +3819,7 @@ class AnthropicHandlerMixin:
                         memory_request_ctx=memory_request_ctx,
                         outcome_provider=provider_name,
                         session_key=session_key,
+                        ccr_stream_provider="anthropic" if event_stream_ccr else None,
                     )
                 else:
                     # Whatever set it — the client's own ``stream: false`` or
@@ -4619,7 +4628,7 @@ class AnthropicHandlerMixin:
                         # client-owned tools, but Headroom's private tool and
                         # marker syntax must never escape (#1877).
                         if (
-                            self.config.ccr_inject_tool
+                            getattr(self.config, "ccr_inject_tool", False)
                             and not buffered_stream_ccr
                             and resp_json
                             and response.status_code == 200
@@ -4650,8 +4659,10 @@ class AnthropicHandlerMixin:
                                     status_code=502,
                                     media_type="application/json",
                                 )
+                            if getattr(self.config, "ccr_resolve_markers_inline", False):
+                                resp_json = resolve_markers_in_response(resp_json)
                             resp_json = strip_internal_retrieve_calls(resp_json, "anthropic")
-                            resp_json = scrub_markers_for_client(resp_json)
+                            resp_json = scrub_client_payload(resp_json)
                             response = httpx.Response(
                                 status_code=200,
                                 content=json.dumps(resp_json).encode(),
@@ -4829,7 +4840,7 @@ class AnthropicHandlerMixin:
                             # Scrub markers in every remaining string field,
                             # including client-tool arguments (#1877).
                             resp_json = strip_internal_retrieve_calls(resp_json, "anthropic")
-                            resp_json = scrub_markers_for_client(resp_json)
+                            resp_json = scrub_client_payload(resp_json)
                             try:
                                 sse_events = self._response_to_sse(resp_json, "anthropic")
                             except ValueError as sse_err:
