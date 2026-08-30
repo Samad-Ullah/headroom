@@ -240,25 +240,13 @@
                         </div>
                     </div>
 
-                    <!-- Cost Saved: single-pane dollars across every layer the
-                         session summary prices (compression, tool-schema
-                         deferral, prefix-cache net, extension-attributed
-                         dollars), split measured vs projected. -->
-                    <div class="bg-surface rounded-lg p-4 border border-border">
-                        <div class="text-xs text-gray-500 uppercase tracking-wide mb-1">Cost Saved</div>
-                        <div class="flex items-baseline gap-2">
-                            <span class="text-3xl font-light tabular-nums text-emerald-400"
-                                  x-text="'$' + formatCurrency(stats.summary?.cost?.total_saved_usd || 0)"></span>
-                            <span class="text-sm text-emerald-400"
-                                  x-text="(stats.summary?.cost?.savings_pct || 0).toFixed(1) + '%'"
-                                  title="Total saved as a fraction of the without-Headroom baseline"></span>
-                        </div>
-                        <div class="mt-1 text-xs text-gray-500 leading-relaxed"
-                             x-text="'Measured $' + formatCurrency(stats.summary?.cost?.measured_saved_usd || 0) + ' · projected $' + formatCurrency(stats.summary?.cost?.projected_saved_usd || 0)"
-                             title="Measured: compression, tool-schema deferral, prefix-cache net. Projected: extension-attributed estimates such as model routing."></div>
-                        <div class="mt-1 text-xs text-gray-600 leading-relaxed"
-                             x-text="'$' + formatCurrency(stats.summary?.cost?.with_headroom_usd || 0) + ' spent vs $' + formatCurrency(stats.summary?.cost?.without_headroom_usd || 0) + ' baseline'"></div>
-                    </div>
+                    <!-- No headline dollar figure here on purpose. Tokens are
+                         what this proxy measures directly; turning them into
+                         money needs a per-model price list and a baseline the
+                         run never actually paid, so a single big number mixes
+                         one measured quantity with several modelled ones and
+                         reads as harder evidence than it is. Dollars belong
+                         next to the mechanism that priced them. -->
 
                     <!-- Output Tokens Saved (counterfactual) -->
                     <div class="bg-surface rounded-lg p-4 border border-border">
