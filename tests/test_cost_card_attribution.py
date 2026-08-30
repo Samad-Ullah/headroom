@@ -40,7 +40,7 @@ def _prices(model: str = MODEL) -> tuple[float, float, float]:
 
 
 def test_compressed_tokens_priced_at_the_rate_they_would_have_been_billed():
-    """Tokens removed from a warm prefix would have been billed as cache reads."""
+    """A cold turn's removed tokens would have been billed as cache writes."""
     from headroom.proxy.server import CostTracker
 
     ct = CostTracker()
@@ -48,20 +48,52 @@ def test_compressed_tokens_priced_at_the_rate_they_would_have_been_billed():
         MODEL,
         tokens_saved=100_000,
         tokens_sent=50_000,
-        cache_read_tokens=900_000,
-        cache_write_tokens=0,
-        uncached_tokens=100_000,
+        cache_read_tokens=0,
+        cache_write_tokens=90_000,
+        uncached_tokens=10_000,
     )
     stats = ct.stats()
 
-    cache_read, _cache_write, uncached = _prices()
-    read_share = 900_000 / 1_000_000
-    expected = 100_000 * (read_share * cache_read + (1 - read_share) * uncached)
+    _cache_read, cache_write, uncached = _prices()
+    write_share = 90_000 / 100_000
+    expected = 100_000 * (write_share * cache_write + (1 - write_share) * uncached)
 
     assert abs(stats["cache_aware_savings_usd"] - expected) < 1e-6
-    # The list-priced figure budgets read stays untouched, and is strictly larger.
-    assert stats["savings_usd"] > stats["cache_aware_savings_usd"]
+    # Writes cost MORE than list, so flat list pricing understates a cold turn.
+    assert stats["cache_aware_savings_usd"] > stats["savings_usd"]
     assert abs(stats["savings_usd"] - 100_000 * uncached) < 1e-6
+
+
+def test_warm_prefix_does_not_drag_the_live_delta_down_to_the_read_rate():
+    """Compression works the live zone; the frozen prefix is not its rate.
+
+    Handlers keep the cached prefix byte-identical for prefix-cache safety and
+    compress only the appended delta, so removed tokens could never have been
+    billed as cache reads. Splitting them across the WHOLE request's mix valued
+    a warm turn at ~a tenth of what the provider would have charged.
+    """
+    from headroom.proxy.server import CostTracker
+
+    ct = CostTracker()
+    ct.record_tokens(
+        MODEL,
+        tokens_saved=10_000,
+        tokens_sent=200_000,
+        cache_read_tokens=190_000,
+        cache_write_tokens=5_000,
+        uncached_tokens=5_000,
+    )
+    stats = ct.stats()
+
+    cache_read, cache_write, uncached = _prices()
+    expected = 10_000 * (0.5 * cache_write + 0.5 * uncached)
+    # stats() rounds dollars to 4dp.
+    assert abs(stats["cache_aware_savings_usd"] - expected) < 1e-4
+
+    # The whole-request mix is 95% cache reads; pricing the delta that way would
+    # have valued it near the read rate.
+    whole_request_mix = 10_000 * (0.95 * cache_read + 0.025 * cache_write + 0.025 * uncached)
+    assert stats["cache_aware_savings_usd"] > 5 * whole_request_mix
 
 
 def test_fully_uncached_request_values_removed_tokens_at_list():
@@ -104,6 +136,35 @@ def test_completion_spend_is_reported_alongside_input_spend():
     assert stats["cost_with_headroom_usd"] > 0
     expected_total = stats["cost_with_headroom_usd"] + stats["output_cost_usd"]
     assert abs(stats["total_cost_usd"] - expected_total) < 1e-6
+
+
+def test_long_context_turn_is_priced_at_the_above_200k_rates():
+    """Past 200k the catalog charges a second, higher tier for input and output."""
+    import litellm
+
+    from headroom.pricing.litellm_pricing import resolve_litellm_model
+    from headroom.proxy.server import CostTracker
+
+    info = litellm.model_cost.get(resolve_litellm_model(MODEL), {})
+    long_input = info["input_cost_per_token_above_200k_tokens"]
+    long_output = info["output_cost_per_token_above_200k_tokens"]
+    assert long_input > info["input_cost_per_token"]
+    assert long_output > info["output_cost_per_token"]
+
+    ct = CostTracker()
+    ct.record_tokens(
+        MODEL,
+        tokens_saved=10_000,
+        tokens_sent=300_000,
+        cache_read_tokens=0,
+        cache_write_tokens=0,
+        uncached_tokens=300_000,
+        output_tokens=5_000,
+    )
+    stats = ct.stats()
+
+    assert abs(stats["output_cost_usd"] - 5_000 * long_output) < 1e-6
+    assert abs(stats["cache_aware_savings_usd"] - 10_000 * long_input) < 1e-6
 
 
 def _summary(cache_net_usd: float, cost_stats: dict) -> dict:
