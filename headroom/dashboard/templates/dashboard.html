@@ -864,6 +864,56 @@
                     </template>
                 </div>
 
+                <!-- Model Routing: shown only when a routing-stats provider is
+                     registered (stats.routing; see headroom.proxy.routing_stats). -->
+                <template x-if="(stats.routing?.pairs || []).length > 0">
+                    <div class="bg-surface rounded-lg p-4 border border-border mb-6">
+                        <div class="flex items-center justify-between mb-3">
+                            <span class="text-sm font-medium text-gray-300">Model Routing</span>
+                            <span class="text-xs text-gray-500 font-mono"
+                                  x-text="(stats.routing.downgrades || 0) + ' downgraded · ' + (stats.routing.upgrades || 0) + ' upgraded · ' + (stats.routing.unchanged || 0) + ' unchanged · ' + formatNumber(stats.routing.decisions || 0) + ' decisions'"></span>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm">
+                                <thead>
+                                    <tr class="text-xs text-gray-500 uppercase tracking-wide text-left">
+                                        <th class="py-1 pr-2 font-medium">Requested</th>
+                                        <th class="py-1 pr-2 font-medium"></th>
+                                        <th class="py-1 pr-4 font-medium">Served</th>
+                                        <th class="py-1 pr-4 font-medium text-right">Requests</th>
+                                        <th class="py-1 pr-4 font-medium text-right">Enforced</th>
+                                        <th class="py-1 pr-4 font-medium text-right">Holdout</th>
+                                        <th class="py-1 pr-4 font-medium text-right">Measured</th>
+                                        <th class="py-1 font-medium text-right">Saved</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <template x-for="p in stats.routing.pairs" :key="p.requested + '>' + p.served">
+                                        <tr class="border-t border-border">
+                                            <td class="py-1.5 pr-2 font-mono text-xs" x-text="p.requested"></td>
+                                            <td class="py-1.5 pr-2 text-xs"
+                                                :class="p.direction === 'downgrade' ? 'text-emerald-400' : (p.direction === 'upgrade' ? 'text-amber-400' : 'text-gray-500')"
+                                                x-text="p.direction === 'downgrade' ? '↓' : (p.direction === 'upgrade' ? '↑' : '→')"></td>
+                                            <td class="py-1.5 pr-4 font-mono text-xs" x-text="p.served"></td>
+                                            <td class="py-1.5 pr-4 text-right tabular-nums" x-text="formatNumber(p.count)"></td>
+                                            <td class="py-1.5 pr-4 text-right tabular-nums" x-text="formatNumber(p.enforced)"></td>
+                                            <td class="py-1.5 pr-4 text-right tabular-nums text-gray-500" x-text="formatNumber(p.holdout)"></td>
+                                            <td class="py-1.5 pr-4 text-right tabular-nums text-gray-500" x-text="formatNumber(p.measured)"></td>
+                                            <td class="py-1.5 text-right tabular-nums"
+                                                :class="p.savings_usd > 0 ? 'text-emerald-400' : (p.savings_usd < 0 ? 'text-red-400' : 'text-gray-500')"
+                                                x-text="(p.savings_usd < 0 ? '-$' : '$') + formatCurrency(Math.abs(p.savings_usd || 0))"></td>
+                                        </tr>
+                                    </template>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="mt-2 text-xs text-gray-600">
+                            Saved = measured baseline-model cost minus served cost, on rerouted rows with provider-reported usage.
+                            The requested model is a ceiling; holdout rows stay unrouted as the control arm.
+                        </div>
+                    </div>
+                </template>
+
                 <!-- Recent Requests Table (with expandable rows) -->
                 <div class="bg-surface rounded-lg border border-border overflow-hidden mb-6">
                     <div class="px-4 py-3 border-b border-border flex justify-between items-center">

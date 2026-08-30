@@ -590,14 +590,34 @@ def build_session_summary(
         best_compression = best["savings_pct"]
         best_detail = f"{best['original']:,} → {best['optimized']:,} tokens"
 
-    # Cost summary — dollar savings are proxy-compression only at model list
-    # price.
+    # Cost summary — every savings layer priced into one card. Measured layers
+    # (compression, tool-schema deferral, prefix-cache net) and
+    # extension-attributed dollars are itemized in ``breakdown``; rows the
+    # attribution ledger flags ``realized=False`` (e.g. a model-routing
+    # extension's decision-time delta) are summed under a ``projected`` key so
+    # a reader can still split measured from estimated. Budget enforcement
+    # keeps reading the unwidened ``savings_usd`` from the tracker.
     cost_stats = proxy.cost_tracker.stats() if proxy.cost_tracker else {}
     cost_with = cost_stats.get("cost_with_headroom_usd", 0.0)
     compression_savings = cost_stats.get("savings_usd", 0.0)
+    tool_savings = cost_stats.get("tool_savings_usd", 0.0)
     cache_net = prefix_cache_stats.get("totals", {}).get("net_savings_usd", 0.0)
-    total_saved_usd = round(compression_savings, 2)
-    cost_without = cost_with + compression_savings
+    ext_realized_usd = 0.0
+    ext_projected_usd = 0.0
+    for row in getattr(metrics, "savings_by_source", {}).values():
+        try:
+            usd = float(row.get("usd", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            continue
+        # tokens-only rows (tool_search) carry usd=0 here — the deferral is
+        # priced from the tracker above, so nothing double-counts.
+        if row.get("realized", True):
+            ext_realized_usd += usd
+        else:
+            ext_projected_usd += usd
+    measured_saved = compression_savings + tool_savings + cache_net + ext_realized_usd
+    total_saved_usd = round(measured_saved + ext_projected_usd, 2)
+    cost_without = cost_with + measured_saved + ext_projected_usd
     savings_pct_cost = round(total_saved_usd / cost_without * 100, 1) if cost_without > 0 else 0.0
 
     # Primary models used
@@ -629,10 +649,15 @@ def build_session_summary(
             "without_headroom_usd": round(cost_without, 2),
             "with_headroom_usd": round(cost_with, 2),
             "total_saved_usd": total_saved_usd,
+            "measured_saved_usd": round(measured_saved, 2),
+            "projected_saved_usd": round(ext_projected_usd, 2),
             "savings_pct": savings_pct_cost,
             "breakdown": {
                 "cache_savings_usd": round(cache_net, 2),
                 "compression_savings_usd": round(compression_savings, 2),
+                "tool_search_savings_usd": round(tool_savings, 2),
+                "extension_realized_usd": round(ext_realized_usd, 2),
+                "extension_projected_usd": round(ext_projected_usd, 2),
             },
         },
     }
@@ -711,6 +736,19 @@ class CostTracker:
         # so the compression-only figure stays available; `stats()` reports both
         # the split and the sum.
         self._tool_saved_by_model: dict[str, int] = {}
+        # Cache-aware counterfactual buckets for the deferred schemas. Had the
+        # schemas been sent, they would have ridden the SAME prefix as the rest
+        # of the request — cold-written at the provider's cache-write rate,
+        # read at its cache-read rate on warm turns, re-written when the TTL
+        # expired. The observed request's own cache mix is the best available
+        # estimate of that rhythm (a TTL expiry shows up as a write-heavy mix
+        # on the real request, so the counterfactual re-write is captured per
+        # request, not modelled). Priced in stats() via _get_cache_prices —
+        # LiteLLM's per-model catalog — so the rates stay provider-agnostic.
+        # Floats: shares of a request's schema tokens, not whole tokens.
+        self._tool_saved_read_by_model: dict[str, float] = {}
+        self._tool_saved_write_by_model: dict[str, float] = {}
+        self._tool_saved_list_by_model: dict[str, float] = {}
         self._tokens_sent_by_model: dict[str, int] = {}
         self._requests_by_model: dict[str, int] = {}
 
@@ -727,6 +765,9 @@ class CostTracker:
         self._last_prune_time = datetime.now()
         self._tokens_saved_by_model.clear()
         self._tool_saved_by_model.clear()
+        self._tool_saved_read_by_model.clear()
+        self._tool_saved_write_by_model.clear()
+        self._tool_saved_list_by_model.clear()
         self._tokens_sent_by_model.clear()
         self._requests_by_model.clear()
         self._api_cache_read_by_model.clear()
@@ -861,6 +902,30 @@ class CostTracker:
         self._tool_saved_by_model[model] = self._tool_saved_by_model.get(model, 0) + max(
             0, tool_schema_saved
         )
+        if tool_schema_saved > 0:
+            # Split this request's deferred schema tokens by the request's own
+            # observed cache mix: the schemas would have shared the prefix, so
+            # they inherit its read/write/uncached proportions. A request the
+            # provider reported no cache data for (or whose write counter was
+            # inferred, not billed) falls back to list price for its full share.
+            write_eff = 0 if cache_inferred else max(0, cache_write_tokens)
+            billed_in = max(0, cache_read_tokens) + write_eff + max(0, uncached_tokens)
+            if billed_in > 0:
+                read_part = tool_schema_saved * max(0, cache_read_tokens) / billed_in
+                write_part = tool_schema_saved * write_eff / billed_in
+                list_part = tool_schema_saved - read_part - write_part
+            else:
+                read_part = write_part = 0.0
+                list_part = float(tool_schema_saved)
+            self._tool_saved_read_by_model[model] = (
+                self._tool_saved_read_by_model.get(model, 0.0) + read_part
+            )
+            self._tool_saved_write_by_model[model] = (
+                self._tool_saved_write_by_model.get(model, 0.0) + write_part
+            )
+            self._tool_saved_list_by_model[model] = (
+                self._tool_saved_list_by_model.get(model, 0.0) + list_part
+            )
         self._tokens_sent_by_model[model] = self._tokens_sent_by_model.get(model, 0) + tokens_sent
         self._requests_by_model[model] = self._requests_by_model.get(model, 0) + 1
         self._api_cache_read_by_model[model] = (
@@ -1186,6 +1251,37 @@ class CostTracker:
                 _cr_price, _cw_price, uncached_price = prices
                 savings_usd += saved * uncached_price
 
+        # Tool-schema deferral, priced CACHE-AWARE rather than flat at list:
+        # had the schemas shipped they would have been part of the same prefix
+        # as the rest of the request — cold-written once at the provider's
+        # cache-write rate, read at its cache-read rate on warm turns, and
+        # re-written on TTL expiry. Each request's schema tokens were bucketed
+        # at record time by that request's observed read/write/uncached mix, so
+        # expiry cycles are captured from real traffic instead of modelled.
+        # Rates come from _get_cache_prices (LiteLLM per-model catalog:
+        # cache_read_input_token_cost / cache_creation_input_token_cost, list
+        # rate when a provider publishes no cache pricing) — the same
+        # provider-agnostic source the real cost math uses, never a hardcoded
+        # multiplier. Reported as its OWN key rather than widening
+        # ``savings_usd``: that figure feeds budget enforcement, and the
+        # session summary widens the cost card from this key instead.
+        tool_savings_usd = 0.0
+        tool_models = (
+            set(self._tool_saved_read_by_model)
+            | set(self._tool_saved_write_by_model)
+            | set(self._tool_saved_list_by_model)
+        )
+        for model in tool_models:
+            prices = self._get_cache_prices(model)
+            if not prices:
+                continue
+            cr_price, cw_price, uncached_price = prices
+            tool_savings_usd += (
+                self._tool_saved_read_by_model.get(model, 0.0) * cr_price
+                + self._tool_saved_write_by_model.get(model, 0.0) * cw_price
+                + self._tool_saved_list_by_model.get(model, 0.0) * uncached_price
+            )
+
         return {
             # Sum of the per-model rows above, so the payload reconciles with
             # itself. ``savings_usd`` below is deliberately NOT widened: tool
@@ -1202,6 +1298,7 @@ class CostTracker:
             "per_model": per_model,
             "cost_with_headroom_usd": round(cost_with_headroom, 4),
             "savings_usd": round(savings_usd, 4),
+            "tool_savings_usd": round(tool_savings_usd, 4),
             # Budget config passthrough — surfaces in /stats["cost"] so
             # `headroom doctor` can report whether a budget is set.
             "budget_limit_usd": self.budget_limit_usd,
