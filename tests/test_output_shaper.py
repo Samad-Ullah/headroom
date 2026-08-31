@@ -10,18 +10,13 @@ import copy
 from typing import Any
 
 from headroom.proxy.output_shaper import (
-    LEGACY_THINKING_FLOOR,
     OutputShaperSettings,
     TurnKind,
     apply_openai_responses_verbosity_steering,
     apply_verbosity_steering,
     classify_openai_responses_input,
     classify_turn,
-    route_effort,
-    route_openai_reasoning_effort,
-    route_openai_text_verbosity,
     shape_openai_chat_request,
-    shape_openai_responses_request,
     shape_request,
     steering_text,
 )
@@ -158,68 +153,6 @@ class TestVerbositySteering:
 
 
 # ---------------------------------------------------------------------------
-# route_effort
-# ---------------------------------------------------------------------------
-
-
-class TestRouteEffort:
-    def test_lowers_explicit_effort_on_mechanical_turn(self):
-        body = {"output_config": {"effort": "xhigh"}}
-        labels = route_effort(body, TurnKind.MECHANICAL_CONTINUATION, ENABLED)
-        assert body["output_config"]["effort"] == "low"
-        assert labels == ["output_shaper:effort:xhigh->low"]
-
-    def test_never_injects_effort_when_absent(self):
-        body: dict[str, Any] = {"messages": []}
-        labels = route_effort(body, TurnKind.MECHANICAL_CONTINUATION, ENABLED)
-        assert "output_config" not in body
-        assert labels == []
-
-    def test_effort_untouched_on_new_ask(self):
-        body = {"output_config": {"effort": "xhigh"}}
-        assert route_effort(body, TurnKind.NEW_USER_ASK, ENABLED) == []
-        assert body["output_config"]["effort"] == "xhigh"
-
-    def test_effort_untouched_on_error_continuation(self):
-        body = {"output_config": {"effort": "xhigh"}}
-        assert route_effort(body, TurnKind.ERROR_CONTINUATION, ENABLED) == []
-        assert body["output_config"]["effort"] == "xhigh"
-
-    def test_effort_already_at_target_untouched(self):
-        body = {"output_config": {"effort": "low"}}
-        assert route_effort(body, TurnKind.MECHANICAL_CONTINUATION, ENABLED) == []
-
-    def test_unknown_effort_value_untouched(self):
-        body = {"output_config": {"effort": "turbo"}}
-        assert route_effort(body, TurnKind.MECHANICAL_CONTINUATION, ENABLED) == []
-        assert body["output_config"]["effort"] == "turbo"
-
-    def test_configurable_mechanical_effort(self):
-        settings = OutputShaperSettings(enabled=True, mechanical_effort="medium")
-        body = {"output_config": {"effort": "xhigh"}}
-        route_effort(body, TurnKind.MECHANICAL_CONTINUATION, settings)
-        assert body["output_config"]["effort"] == "medium"
-
-    def test_legacy_thinking_budget_clamped(self):
-        body = {"thinking": {"type": "enabled", "budget_tokens": 32000}}
-        labels = route_effort(body, TurnKind.MECHANICAL_CONTINUATION, ENABLED)
-        assert body["thinking"]["budget_tokens"] == LEGACY_THINKING_FLOOR
-        assert body["thinking"]["type"] == "enabled"  # never toggled
-        assert labels == [f"output_shaper:thinking_budget:32000->{LEGACY_THINKING_FLOOR}"]
-
-    def test_legacy_budget_at_floor_untouched(self):
-        body = {"thinking": {"type": "enabled", "budget_tokens": LEGACY_THINKING_FLOOR}}
-        assert route_effort(body, TurnKind.MECHANICAL_CONTINUATION, ENABLED) == []
-
-    def test_adaptive_thinking_untouched(self):
-        body = {"thinking": {"type": "adaptive"}}
-        assert route_effort(body, TurnKind.MECHANICAL_CONTINUATION, ENABLED) == []
-        assert body["thinking"] == {"type": "adaptive"}
-
-
-# ---------------------------------------------------------------------------
-# shape_request (end to end)
-# ---------------------------------------------------------------------------
 
 
 class TestShapeRequest:
@@ -234,7 +167,11 @@ class TestShapeRequest:
         assert result.changed is False
         assert body == snapshot
 
-    def test_enabled_applies_steering_and_effort_routing(self):
+    def test_steering_is_the_only_lever(self):
+        """Steering applies; request params are left exactly as the client sent
+        them. Effort routing was removed after measurement: on mechanical turns
+        it saved ~$0.0007 while a switch cost ~$0.011 in cache re-writes, and
+        the model's own API now rejects the legacy thinking form outright."""
         body = {
             "system": "Sys.",
             "messages": _mechanical_messages(),
@@ -243,11 +180,9 @@ class TestShapeRequest:
         }
         result = shape_request(body, ENABLED)
         assert result.changed is True
-        assert result.labels == [
-            "output_shaper:verbosity:L2",
-            "output_shaper:effort:xhigh->low",
-        ]
-        assert body["output_config"]["effort"] == "low"
+        assert result.labels == ["output_shaper:verbosity:L2"]
+        assert body["output_config"]["effort"] == "xhigh", "must not touch effort"
+        assert body["thinking"] == {"type": "adaptive"}, "must not touch thinking"
         assert body["system"][1]["text"] == steering_text(2)
 
     def test_new_ask_gets_steering_but_keeps_effort(self):
@@ -275,19 +210,15 @@ class TestShapeRequest:
     def test_from_env_enabled_with_overrides(self, monkeypatch):
         monkeypatch.setenv("HEADROOM_OUTPUT_SHAPER", "1")
         monkeypatch.setenv("HEADROOM_VERBOSITY_LEVEL", "3")
-        monkeypatch.setenv("HEADROOM_MECHANICAL_EFFORT", "medium")
         settings = OutputShaperSettings.from_env()
         assert settings.enabled is True
         assert settings.verbosity_level == 3
-        assert settings.mechanical_effort == "medium"
 
     def test_from_env_clamps_bad_values(self, monkeypatch):
         monkeypatch.setenv("HEADROOM_OUTPUT_SHAPER", "true")
         monkeypatch.setenv("HEADROOM_VERBOSITY_LEVEL", "99")
-        monkeypatch.setenv("HEADROOM_MECHANICAL_EFFORT", "bogus")
         settings = OutputShaperSettings.from_env()
         assert settings.verbosity_level == 4
-        assert settings.mechanical_effort == "low"
 
 
 class TestOpenAIResponsesClassify:
@@ -332,77 +263,6 @@ class TestOpenAIResponsesSteering:
         snapshot = copy.deepcopy(body)
         assert apply_openai_responses_verbosity_steering(body, 2) is False
         assert body == snapshot
-
-
-class TestOpenAIResponsesReasoning:
-    def test_reasoning_effort_lowers_only_for_mechanical_continuations(self):
-        body = {"reasoning": {"effort": "xhigh"}}
-        labels = route_openai_reasoning_effort(
-            body,
-            TurnKind.MECHANICAL_CONTINUATION,
-            ENABLED,
-        )
-        assert labels == ["output_shaper:reasoning_effort:xhigh->low"]
-        assert body["reasoning"]["effort"] == "low"
-
-        new_ask = {"reasoning": {"effort": "xhigh"}}
-        assert route_openai_reasoning_effort(new_ask, TurnKind.NEW_USER_ASK, ENABLED) == []
-        assert new_ask["reasoning"]["effort"] == "xhigh"
-
-    def test_reasoning_effort_is_not_injected_when_absent(self):
-        body: dict[str, Any] = {}
-        labels = route_openai_reasoning_effort(
-            body,
-            TurnKind.MECHANICAL_CONTINUATION,
-            ENABLED,
-        )
-        assert labels == []
-        assert "reasoning" not in body
-
-
-class TestOpenAIResponsesTextVerbosity:
-    def test_text_verbosity_set_for_gpt5_family(self):
-        body = {"model": "gpt-5.1"}
-        labels = route_openai_text_verbosity(body)
-        assert labels == ["output_shaper:text_verbosity:unset->low"]
-        assert body["text"] == {"verbosity": "low"}
-
-    def test_text_verbosity_not_injected_for_non_gpt5(self):
-        body = {"model": "gpt-4o"}
-        assert route_openai_text_verbosity(body) == []
-        assert "text" not in body
-
-    def test_existing_text_verbosity_is_lowered_for_any_model(self):
-        body = {"model": "gpt-4o", "text": {"verbosity": "medium"}}
-        labels = route_openai_text_verbosity(body)
-        assert labels == ["output_shaper:text_verbosity:medium->low"]
-        assert body["text"]["verbosity"] == "low"
-
-    def test_shape_openai_responses_combines_steering_native_knobs(self):
-        body = {
-            "model": "gpt-5",
-            "input": [
-                {
-                    "type": "function_call_output",
-                    "call_id": "call_1",
-                    "output": "ok",
-                }
-            ],
-            "instructions": "System.",
-            "reasoning": {"effort": "xhigh"},
-            "text": {"verbosity": "medium"},
-        }
-        result = shape_openai_responses_request(body, ENABLED)
-
-        assert result.changed is True
-        assert result.labels == [
-            "output_shaper:verbosity:L2",
-            "output_shaper:reasoning_effort:xhigh->low",
-            "output_shaper:text_verbosity:medium->low",
-        ]
-        assert steering_text(2) in body["instructions"]
-        assert body["reasoning"]["effort"] == "low"
-        assert body["text"]["verbosity"] == "low"
 
 
 class TestShapeOpenAIChatRequest:
@@ -542,9 +402,7 @@ class TestCacheModeSuppressesSteeringOnly:
                 {"role": "user", "content": [{"type": "tool_result", "content": "ok"}]},
             ],
         }
-        settings = OutputShaperSettings(
-            enabled=True, verbosity_level=2, steering_enabled=False, effort_router_enabled=True
-        )
+        settings = OutputShaperSettings(enabled=True, verbosity_level=2, steering_enabled=False)
         result = shape_request(body, settings, level_override=0)
         assert "system" not in body, "cache mode must not create a system block"
         assert result is not None

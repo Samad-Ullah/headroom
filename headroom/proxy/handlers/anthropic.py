@@ -3232,30 +3232,6 @@ class AnthropicHandlerMixin:
             # shaper, so an extension sees the request exactly as it will go out
             # and a turn classifier reading ``messages`` sees the final list.
             #
-            # ``body`` is passed because the output-side controls — effort,
-            # thinking budget, text verbosity, max_tokens — live there and on no
-            # other field of the event.
-            #
-            # Gated on ``_bypass``: ``x-headroom-bypass: true`` (and
-            # ``x-headroom-mode: passthrough``) mean the caller asked for their
-            # request untouched, and this is the one stage that hands an
-            # extension a writable body. The built-in shaper above honours the
-            # same gate; an extension that only wants to observe bypassed
-            # traffic still sees PRE_SEND, which carries no body.
-            if not _bypass:
-                self.pipeline_extensions.emit(
-                    PipelineStage.PRE_SEND_PARAMS,
-                    operation="proxy.request",
-                    request_id=request_id,
-                    provider=pipeline_provider,
-                    model=model,
-                    messages=body.get("messages"),
-                    tools=tools,
-                    headers=headers,
-                    body=body,
-                    metadata={"path": pipeline_path, "stream": stream},
-                )
-
             # Unit 2: mark end of pre-upstream phase. Everything after this
             # point is upstream I/O or post-response bookkeeping.
             stage_timer.record(

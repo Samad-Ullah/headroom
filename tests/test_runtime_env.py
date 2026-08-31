@@ -62,22 +62,18 @@ def test_set_overrides_ignores_unknown_keys_and_non_strings():
 def test_explicit_env_returns_only_explicitly_set_knobs():
     environ = {
         "HEADROOM_OUTPUT_SHAPER": "1",
-        "HEADROOM_MECHANICAL_EFFORT": "low",
         "HEADROOM_VERBOSITY_LEVEL": "   ",  # blank -> not "explicitly set"
         "PATH": "/usr/bin",  # not a knob
     }
     assert rt.explicit_env(environ) == {
         "HEADROOM_OUTPUT_SHAPER": "1",
-        "HEADROOM_MECHANICAL_EFFORT": "low",
     }
 
 
 def test_effective_runtime_env_reports_override_or_none(monkeypatch):
-    monkeypatch.setenv("HEADROOM_EFFORT_ROUTER", "0")
     rt.set_overrides({"HEADROOM_OUTPUT_SHAPER": "1"})
     eff = rt.effective_runtime_env()
     assert eff["HEADROOM_OUTPUT_SHAPER"] == "1"  # from override
-    assert eff["HEADROOM_EFFORT_ROUTER"] == "0"  # from env
     assert eff["HEADROOM_VERBOSITY_LEVEL"] is None  # unset
     # Every registered knob is reported.
     assert set(eff) == {knob.env for knob in rt.RUNTIME_ENV_KNOBS}

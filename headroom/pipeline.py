@@ -28,7 +28,6 @@ class PipelineStage(str, Enum):
     INPUT_COMPRESSED = "input_compressed"
     INPUT_REMEMBERED = "input_remembered"
     PRE_SEND = "pre_send"
-    PRE_SEND_PARAMS = "pre_send_params"
     POST_SEND = "post_send"
     RESPONSE_RECEIVED = "response_received"
     OUTCOME_OBSERVED = "outcome_observed"
@@ -44,7 +43,6 @@ CANONICAL_PIPELINE_STAGES: tuple[PipelineStage, ...] = (
     PipelineStage.INPUT_COMPRESSED,
     PipelineStage.INPUT_REMEMBERED,
     PipelineStage.PRE_SEND,
-    PipelineStage.PRE_SEND_PARAMS,
     PipelineStage.POST_SEND,
     PipelineStage.RESPONSE_RECEIVED,
     PipelineStage.OUTCOME_OBSERVED,
@@ -103,23 +101,9 @@ class OutcomeSnapshot:
 class PipelineEvent:
     """Event emitted at a canonical pipeline stage.
 
-    Extensions may mutate ``messages``, ``tools``, ``headers``, ``body`` or
-    ``metadata`` in place, or return a replacement ``PipelineEvent`` from
+    Extensions may mutate ``messages``, ``tools``, ``headers`` or ``metadata``
+    in place, or return a replacement ``PipelineEvent`` from
     ``on_pipeline_event``.
-
-    ``body`` carries the outbound provider request itself, and exists because
-    the fields that control what a model *writes* — ``output_config.effort``,
-    ``thinking.budget_tokens``, ``text.verbosity``, ``max_tokens`` — live on the
-    body and on none of the other fields here. Without it this contract could
-    only reach what a model reads.
-
-    Mutating ``body`` at :attr:`PipelineStage.PRE_SEND_PARAMS` is cheap;
-    mutating it anywhere that changes the model, system prompt, tool
-    definitions or message history is not. Those four are the provider's prefix
-    cache key, so changing them mid-conversation invalidates the cached prefix —
-    on a 100k context roughly $0.27 against the ~$0.005 of output a terser
-    instruction saves. Extensions that shape output should decide prompt content
-    once per conversation and vary only the non-cache-key parameters per turn.
     """
 
     stage: PipelineStage
@@ -130,7 +114,6 @@ class PipelineEvent:
     messages: list[dict[str, Any]] | None = None
     tools: list[dict[str, Any]] | None = None
     headers: dict[str, str] | None = None
-    body: dict[str, Any] | None = None
     response: Any = None
     outcome: OutcomeSnapshot | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
@@ -167,12 +150,9 @@ def discover_pipeline_extensions(
     those the operator named are loaded. Merely installing a package — as a
     transitive dependency, say — must not silently start rewriting requests.
 
-    That gate was tolerable to omit when this contract could only touch
-    ``messages``. It is not now: ``PipelineEvent.body`` reaches ``max_tokens``,
-    ``effort`` and the system prompt on live traffic, so an unaudited package in
-    the same environment could change what every request costs and what every
-    model writes. The proxy-extension seam has always worked this way; this
-    brings the pipeline seam in line.
+    An unaudited package in the same environment could otherwise rewrite the
+    messages of every request on live traffic. The proxy-extension seam has
+    always worked this way; this brings the pipeline seam in line.
 
     Extensions passed directly to :class:`PipelineExtensionManager` are
     unaffected — constructing one and handing it over is already explicit.
@@ -269,7 +249,6 @@ class PipelineExtensionManager:
         messages: list[dict[str, Any]] | None = None,
         tools: list[dict[str, Any]] | None = None,
         headers: dict[str, str] | None = None,
-        body: dict[str, Any] | None = None,
         response: Any = None,
         outcome: OutcomeSnapshot | None = None,
         metadata: dict[str, Any] | None = None,
@@ -285,7 +264,6 @@ class PipelineExtensionManager:
             messages=messages,
             tools=tools,
             headers=headers,
-            body=body,
             response=response,
             outcome=outcome,
             metadata=metadata or {},
