@@ -56,6 +56,7 @@ from headroom.proxy.memory_query import MemoryQuery
 from headroom.proxy.model_router import estimate_input_tokens
 from headroom.proxy.nonstream_sse_policy import should_recover_sse_reply
 from headroom.proxy.outcome import RequestOutcome
+from headroom.proxy.output_shaper import shaper_enabled_for, steering_allowed_for
 from headroom.proxy.thinking_tokens import ThinkingTokens, extract_thinking_tokens
 
 logger = logging.getLogger("headroom.proxy")
@@ -3185,11 +3186,8 @@ class AnthropicHandlerMixin:
                 )
 
                 _shaper_settings = OutputShaperSettings.from_env(
-                    enabled=(
-                        self.config.rollout.is_enabled("proxy_output_shaper")
-                        if getattr(self.config, "rollout", None) is not None
-                        else None
-                    )
+                    enabled=(shaper_enabled_for(getattr(self, "config", None))),
+                    steering_enabled=steering_allowed_for(getattr(self, "config", None)),
                 )
                 if _shaper_settings.enabled:
                     # Conversation-stable holdout assignment: a whole
@@ -3237,18 +3235,26 @@ class AnthropicHandlerMixin:
             # ``body`` is passed because the output-side controls — effort,
             # thinking budget, text verbosity, max_tokens — live there and on no
             # other field of the event.
-            self.pipeline_extensions.emit(
-                PipelineStage.PRE_SEND_PARAMS,
-                operation="proxy.request",
-                request_id=request_id,
-                provider=pipeline_provider,
-                model=model,
-                messages=body.get("messages"),
-                tools=tools,
-                headers=headers,
-                body=body,
-                metadata={"path": pipeline_path, "stream": stream},
-            )
+            #
+            # Gated on ``_bypass``: ``x-headroom-bypass: true`` (and
+            # ``x-headroom-mode: passthrough``) mean the caller asked for their
+            # request untouched, and this is the one stage that hands an
+            # extension a writable body. The built-in shaper above honours the
+            # same gate; an extension that only wants to observe bypassed
+            # traffic still sees PRE_SEND, which carries no body.
+            if not _bypass:
+                self.pipeline_extensions.emit(
+                    PipelineStage.PRE_SEND_PARAMS,
+                    operation="proxy.request",
+                    request_id=request_id,
+                    provider=pipeline_provider,
+                    model=model,
+                    messages=body.get("messages"),
+                    tools=tools,
+                    headers=headers,
+                    body=body,
+                    metadata={"path": pipeline_path, "stream": stream},
+                )
 
             # Unit 2: mark end of pre-upstream phase. Everything after this
             # point is upstream I/O or post-response bookkeeping.

@@ -160,7 +160,16 @@ def test_admin_runtime_env_applies_and_reflects_in_health(loopback_client):
     ("rollout", "expected_enabled", "expected_reason"),
     [
         (resolve_rollout({"HEADROOM_ROLLOUT_CHANNEL": "beta"}), True, "legacy_alias"),
-        (resolve_rollout({}), False, "blocked_by_channel"),
+        # Was ``(resolve_rollout({}), False, "blocked_by_channel")`` while
+        # ``proxy_output_shaper`` was BETA: on the default channel the admin
+        # POST could not enable it. The feature is now STABLE and on by
+        # default, so the same POST is honoured. The escalation-refusal
+        # property this case used to cover cannot be reproduced through this
+        # endpoint any more — ``/admin/runtime-env`` re-resolves exactly one
+        # rollout alias, ``HEADROOM_OUTPUT_SHAPER`` (see server.py), so there
+        # is no second, still-gated feature to point it at. Channel gating
+        # itself stays covered in test_rollout.py.
+        (resolve_rollout({}), True, "legacy_alias"),
         (
             resolve_rollout(
                 {

@@ -402,10 +402,24 @@ class SavingsRecorder:
         """Per-request output tokens saved, for the savings rollup.
 
         For a treatment request, the synthetic-control estimate
-        ``max(0, baseline_mean(stratum) - output_tokens)``; 0 for control,
-        unknown strata, or when no shaping label is present. Read-only:
-        unlike ``record_from_labels`` it does not mutate the ledger, so the
-        two compose without double-counting."""
+        ``baseline_mean(stratum) - output_tokens``; 0 for control, unknown
+        strata, or when no shaping label is present. Read-only: unlike
+        ``record_from_labels`` it does not mutate the ledger, so the two
+        compose without double-counting.
+
+        The delta is **clamped at zero here**, which is deliberate and is not
+        in tension with this module's "never clamped per-request" rule. That
+        rule governs the tier-1 estimate in :meth:`estimate`, which sums signed
+        deltas (``total_saved += n * (mu - acc.mean)``) precisely so that
+        chattier-than-baseline turns pull the headline down. This method feeds
+        something else: the per-request savings rollup on ``RequestOutcome``,
+        which flows to Prometheus and the savings ledger. Those are
+        accumulate-only surfaces — both consumers floor it again
+        (``savings_tracker`` at the ``estimate_request_savings_usd`` and
+        ``record_request`` boundaries), and ``prometheus_metrics`` clamps a
+        negative ``tokens_saved`` with an "artifact" log for the same reason.
+        Keeping the floor here makes that boundary explicit rather than
+        relying on every downstream caller to reapply it."""
         for label in labels or ():
             parsed = parse_stratum_label(str(label))
             if parsed is None:

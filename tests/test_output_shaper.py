@@ -440,3 +440,111 @@ class TestShapeOpenAIChatRequest:
         second = shape_openai_chat_request(body, ENABLED)
         assert second.changed is False
         assert body == snapshot
+
+
+class TestShaperEnabledFor:
+    """The gate that makes default-on safe.
+
+    Output shaping is independent of input compression on purpose, so
+    ``optimize=False`` must not veto a shaper the operator explicitly asked
+    for. But once the feature defaults on, ``optimize=False`` with no explicit
+    request has to stay byte-faithful: shaping appends a steering block to the
+    system tail, and on a body with no ``system`` field it creates one.
+    """
+
+    @staticmethod
+    def _config(*, optimize: bool, env: dict[str, str] | None = None):
+        from types import SimpleNamespace
+
+        from headroom.rollout import resolve_rollout
+
+        return SimpleNamespace(optimize=optimize, rollout=resolve_rollout(env or {}))
+
+    def test_default_on_shapes_when_optimizing(self):
+        from headroom.proxy.output_shaper import shaper_enabled_for
+
+        assert shaper_enabled_for(self._config(optimize=True)) is True
+
+    def test_default_on_does_not_shape_when_optimize_is_off(self):
+        """The byte-faithful invariant: transforms off means bytes unchanged."""
+        from headroom.proxy.output_shaper import shaper_enabled_for
+
+        assert shaper_enabled_for(self._config(optimize=False)) is False
+
+    def test_explicit_request_shapes_even_with_optimize_off(self):
+        """Shaping without compression is a supported combination."""
+        from headroom.proxy.output_shaper import shaper_enabled_for
+
+        cfg = self._config(optimize=False, env={"HEADROOM_OUTPUT_SHAPER": "1"})
+        assert shaper_enabled_for(cfg) is True
+
+    def test_kill_switch_wins_over_everything(self):
+        from headroom.proxy.output_shaper import shaper_enabled_for
+
+        for env in (
+            {"HEADROOM_OUTPUT_SHAPER": "0"},
+            {"HEADROOM_DISABLE_FEATURES": "proxy_output_shaper"},
+        ):
+            assert shaper_enabled_for(self._config(optimize=True, env=env)) is False
+
+    def test_no_rollout_snapshot_falls_back_to_the_env_var(self):
+        """SDK/test callers build a config without a snapshot; returning None
+        preserves OutputShaperSettings.from_env's own resolution."""
+        from types import SimpleNamespace
+
+        from headroom.proxy.output_shaper import shaper_enabled_for
+
+        assert shaper_enabled_for(SimpleNamespace(optimize=True, rollout=None)) is None
+        assert shaper_enabled_for(None) is None
+
+
+class TestCacheModeSuppressesSteeringOnly:
+    """``mode="cache"`` freezes prior turns for prefix-cache stability.
+
+    Steering is the one lever that writes into that key: it appends to the
+    system-prompt tail, and on a body carrying no ``system`` field it creates
+    one, displacing ``messages[0]``. Effort routing and the thinking budget
+    ride request parameters outside the key, so they must keep working — the
+    point is a targeted suppression, not switching the feature off.
+    """
+
+    def test_steering_allowed_for_reads_the_mode(self):
+        from types import SimpleNamespace
+
+        from headroom.proxy.output_shaper import steering_allowed_for
+
+        assert steering_allowed_for(SimpleNamespace(mode="token")) is True
+        assert steering_allowed_for(SimpleNamespace(mode="cache")) is False
+        assert steering_allowed_for(None) is True, "absent config must not disable levers"
+
+    def test_cache_mode_resolves_level_zero(self):
+        from headroom.proxy.output_shaper import OutputShaperSettings, resolve_verbosity_level
+
+        settings = OutputShaperSettings(enabled=True, verbosity_level=3, steering_enabled=False)
+        assert resolve_verbosity_level(settings) == (0, "cache_mode")
+
+    def test_cache_mode_outranks_the_manual_level_override(self, monkeypatch):
+        """An env-set level must not reintroduce the prefix mutation."""
+        from headroom.proxy import runtime_env
+        from headroom.proxy.output_shaper import OutputShaperSettings, resolve_verbosity_level
+
+        monkeypatch.setattr(runtime_env, "getenv", lambda k, d="": "4" if "VERBOSITY" in k else d)
+        settings = OutputShaperSettings(enabled=True, verbosity_level=4, steering_enabled=False)
+        assert resolve_verbosity_level(settings)[0] == 0
+
+    def test_effort_routing_survives_cache_mode(self):
+        """The savings that do not touch the cache key must still apply."""
+        from headroom.proxy.output_shaper import OutputShaperSettings, shape_request
+
+        body = {
+            "model": "claude-sonnet-4",
+            "messages": [
+                {"role": "user", "content": [{"type": "tool_result", "content": "ok"}]},
+            ],
+        }
+        settings = OutputShaperSettings(
+            enabled=True, verbosity_level=2, steering_enabled=False, effort_router_enabled=True
+        )
+        result = shape_request(body, settings, level_override=0)
+        assert "system" not in body, "cache mode must not create a system block"
+        assert result is not None

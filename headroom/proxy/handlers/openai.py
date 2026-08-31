@@ -83,6 +83,7 @@ from headroom.proxy.cost import header_safe_transforms
 from headroom.proxy.handlers._debug_dump import _debug_dump_mode, _redact_debug_value
 from headroom.proxy.image_isolation import run_image_compression_isolated
 from headroom.proxy.outcome import RequestOutcome
+from headroom.proxy.output_shaper import shaper_enabled_for, steering_allowed_for
 from headroom.proxy.passthrough import (
     custom_base_passthrough_telemetry as _custom_base_passthrough_telemetry,
 )
@@ -3170,13 +3171,7 @@ class OpenAIHandlerMixin:
                 payload,
                 model=model,
                 request_id=request_id,
-                output_shaper_enabled=(
-                    getattr(getattr(self, "config", None), "rollout", None).is_enabled(
-                        "proxy_output_shaper"
-                    )
-                    if getattr(getattr(self, "config", None), "rollout", None) is not None
-                    else None
-                ),
+                output_shaper_enabled=(shaper_enabled_for(getattr(self, "config", None))),
             )
             compression_kwargs: dict[str, Any] = {
                 "model": model,
@@ -4482,11 +4477,8 @@ class OpenAIHandlerMixin:
             )
 
             _shaper_settings = OutputShaperSettings.from_env(
-                enabled=(
-                    self.config.rollout.is_enabled("proxy_output_shaper")
-                    if getattr(self.config, "rollout", None) is not None
-                    else None
-                )
+                enabled=(shaper_enabled_for(getattr(self, "config", None))),
+                steering_enabled=steering_allowed_for(getattr(self, "config", None)),
             )
             if _shaper_settings.enabled:
                 # Conversation-stable holdout: a whole conversation is treatment
@@ -5938,11 +5930,7 @@ class OpenAIHandlerMixin:
                     if _http_conversation_key
                     else None
                 ),
-                output_shaper_enabled=(
-                    self.config.rollout.is_enabled("proxy_output_shaper")
-                    if getattr(self.config, "rollout", None) is not None
-                    else None
-                ),
+                output_shaper_enabled=(shaper_enabled_for(getattr(self, "config", None))),
             )
             _append_unique_transforms(transforms_applied, _shape_result.labels)
             if _shape_result.changed:
@@ -7822,11 +7810,7 @@ class OpenAIHandlerMixin:
                         self.openai_provider,
                     ),
                     conversation_key=f"ws:{session_id}",
-                    output_shaper_enabled=(
-                        self.config.rollout.is_enabled("proxy_output_shaper")
-                        if getattr(self.config, "rollout", None) is not None
-                        else None
-                    ),
+                    output_shaper_enabled=(shaper_enabled_for(getattr(self, "config", None))),
                 )
                 _append_unique_transforms(transforms_applied, _shape_labels)
                 if _shape_modified:
@@ -8277,9 +8261,7 @@ class OpenAIHandlerMixin:
                                         ),
                                         conversation_key=f"ws:{session_id}",
                                         output_shaper_enabled=(
-                                            self.config.rollout.is_enabled("proxy_output_shaper")
-                                            if getattr(self.config, "rollout", None) is not None
-                                            else None
+                                            shaper_enabled_for(getattr(self, "config", None))
                                         ),
                                     )
                                     _append_unique_transforms(

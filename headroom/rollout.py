@@ -104,9 +104,10 @@ FEATURES: dict[str, FeatureSpec] = {
     ),
     "proxy_output_shaper": FeatureSpec(
         name="proxy_output_shaper",
-        available_in=RolloutChannel.BETA,
+        available_in=RolloutChannel.STABLE,
+        default_enabled_in=RolloutChannel.STABLE,
         legacy_env=("HEADROOM_OUTPUT_SHAPER",),
-        description="Proxy output-shaping path for response-side experiments.",
+        description="Output-token shaping: verbosity steering and effort routing.",
     ),
     "read_maturation": FeatureSpec(
         name="read_maturation",

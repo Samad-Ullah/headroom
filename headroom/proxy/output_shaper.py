@@ -69,6 +69,7 @@ from headroom.proxy.output_turn_policy import (
     classify_openai_responses_input,
     classify_turn,
 )
+from headroom.rollout import FeatureDecisionReason
 
 logger = logging.getLogger(__name__)
 
@@ -103,9 +104,17 @@ class OutputShaperSettings:
     verbosity_level: int = 2
     effort_router_enabled: bool = True
     mechanical_effort: str = "low"
+    # False in ``mode="cache"``. Steering is the one lever that writes into the
+    # provider prefix-cache key (it appends to the system-prompt tail, and on a
+    # body with no system field it creates one); effort routing and the
+    # thinking budget sit outside the key and stay on. See
+    # :func:`steering_allowed_for`.
+    steering_enabled: bool = True
 
     @classmethod
-    def from_env(cls, *, enabled: bool | None = None) -> OutputShaperSettings:
+    def from_env(
+        cls, *, enabled: bool | None = None, steering_enabled: bool = True
+    ) -> OutputShaperSettings:
         """Resolve tuning; running proxies always inject the resolved gate.
 
         ``None`` preserves the helper's direct-call compatibility for SDK/tests,
@@ -136,7 +145,61 @@ class OutputShaperSettings:
             verbosity_level=level,
             effort_router_enabled=router,
             mechanical_effort=mech,
+            steering_enabled=steering_enabled,
         )
+
+
+def shaper_enabled_for(config: Any) -> bool | None:
+    """Resolve the output-shaper gate for a proxy config.
+
+    Output shaping is deliberately independent of input compression — an
+    operator can run ``optimize=False`` and still want terser responses, and
+    the WS/Responses shaper tests pin that combination. So ``optimize`` does
+    not veto shaping outright. What it vetoes is shaping that nobody asked
+    for.
+
+    Since the feature defaults on, ``optimize=False`` plus *no* explicit
+    request means an operator who turned every transform off would silently
+    start getting a steering block appended to their system-prompt tail — and
+    on a request carrying no ``system`` field at all, would have one created.
+    That breaks the byte-faithful forwarding invariant. So in that one
+    combination the default loses:
+
+    * enabled explicitly (``HEADROOM_OUTPUT_SHAPER=1``, ``HEADROOM_FEATURES``)
+      → shape, whatever ``optimize`` says;
+    * enabled only by default, with ``optimize=False`` → do not shape;
+    * enabled only by default, with ``optimize=True`` → shape.
+
+    Returns ``None`` when there is no rollout snapshot to consult, which
+    preserves :meth:`OutputShaperSettings.from_env`'s env-var fallback for the
+    SDK and test callers that construct a config without one.
+    """
+    rollout = getattr(config, "rollout", None)
+    if rollout is None:
+        return None
+    try:
+        decision = rollout.decision("proxy_output_shaper")
+    except (KeyError, AttributeError):
+        return None
+    if not decision.enabled:
+        return False
+    if getattr(config, "optimize", True):
+        return True
+    return decision.reason is not FeatureDecisionReason.DEFAULT
+
+
+def steering_allowed_for(config: Any) -> bool:
+    """False when the proxy is in prefix-freezing cache mode.
+
+    ``mode="cache"`` freezes prior turns specifically to keep the provider's
+    prefix-cache key byte-stable (see ``ProxyConfig.mode``). Verbosity steering
+    writes into that key, so running it there trades a large, certain cache
+    cost for a small, uncertain output saving — the wrong side of a roughly
+    60x margin on a long context. Effort routing and the thinking budget are
+    unaffected: they ride request parameters outside the cache key, so they
+    keep saving in cache mode.
+    """
+    return getattr(config, "mode", None) != "cache"
 
 
 def resolve_verbosity_level(settings: OutputShaperSettings) -> tuple[int, str]:
@@ -151,6 +214,13 @@ def resolve_verbosity_level(settings: OutputShaperSettings) -> tuple[int, str]:
     Returns ``(level, source)``. Kept separate from :func:`shape_request` so the
     body-mutating core stays a pure function of an explicit level.
     """
+    if not settings.steering_enabled:
+        # Level 0 is the documented "no steering" value, so this disables the
+        # only cache-key-mutating lever while leaving effort routing on. It
+        # deliberately outranks the manual override below: a level set in the
+        # environment must not reintroduce a prefix mutation the mode exists
+        # to prevent.
+        return 0, "cache_mode"
     if runtime_env.getenv("HEADROOM_VERBOSITY_LEVEL"):
         return settings.verbosity_level, "env"
 
