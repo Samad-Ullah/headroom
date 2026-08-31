@@ -3229,6 +3229,27 @@ class AnthropicHandlerMixin:
                                 f"{shape_result.labels}"
                             )
 
+            # Params stage: the last chance to change what the model WRITES.
+            # Emitted here, after every message mutation and after the built-in
+            # shaper, so an extension sees the request exactly as it will go out
+            # and a turn classifier reading ``messages`` sees the final list.
+            #
+            # ``body`` is passed because the output-side controls — effort,
+            # thinking budget, text verbosity, max_tokens — live there and on no
+            # other field of the event.
+            self.pipeline_extensions.emit(
+                PipelineStage.PRE_SEND_PARAMS,
+                operation="proxy.request",
+                request_id=request_id,
+                provider=pipeline_provider,
+                model=model,
+                messages=body.get("messages"),
+                tools=tools,
+                headers=headers,
+                body=body,
+                metadata={"path": pipeline_path, "stream": stream},
+            )
+
             # Unit 2: mark end of pre-upstream phase. Everything after this
             # point is upstream I/O or post-response bookkeeping.
             stage_timer.record(
@@ -3403,6 +3424,7 @@ class AnthropicHandlerMixin:
                         # ``None`` — matching the direct-Anthropic path.
                         output_tokens = int(usage.get("output_tokens", 0) or 0)
                         _thinking = _thinking_tokens_for(backend_response.body)
+                        _stop_reason = (backend_response.body or {}).get("stop_reason")
 
                         _backend_name = request_backend.name if request_backend else "anthropic"
                         # Eligible-only denominator for the active
@@ -3514,6 +3536,7 @@ class AnthropicHandlerMixin:
                                 uncached_input_tokens=uncached_input_tokens,
                                 thinking_tokens=_thinking.tokens,
                                 thinking_inferred=_thinking.inferred,
+                                stop_reason=_stop_reason,
                                 total_latency_ms=total_latency,
                                 overhead_ms=optimization_latency,
                                 pipeline_timing=pipeline_timing,
@@ -4354,10 +4377,12 @@ class AnthropicHandlerMixin:
                         # hit an unbound name on an early-exit or except path — an
                         # accounting field must not be able to 500 a live request.
                         _thinking = ThinkingTokens()
+                        _stop_reason = None
                         if resp_json:
                             usage = resp_json.get("usage", {})
                             output_tokens = int(usage.get("output_tokens", 0) or 0)
                             _thinking = _thinking_tokens_for(resp_json)
+                            _stop_reason = (resp_json or {}).get("stop_reason")
                             # The split is measured against the final response
                             # only. ``output_tokens`` below also absorbs usage
                             # from hook-triggered calls whose bodies are not
@@ -4544,6 +4569,7 @@ class AnthropicHandlerMixin:
                                 uncached_input_tokens=uncached_input_tokens,
                                 thinking_tokens=_thinking.tokens,
                                 thinking_inferred=_thinking.inferred,
+                                stop_reason=_stop_reason,
                                 total_latency_ms=total_latency,
                                 overhead_ms=optimization_latency,
                                 pipeline_timing=pipeline_timing,

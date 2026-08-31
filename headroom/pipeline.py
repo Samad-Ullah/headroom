@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import importlib.metadata
 import logging
+import os
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Protocol
@@ -11,6 +13,7 @@ from typing import Any, Protocol
 log = logging.getLogger(__name__)
 
 ENTRY_POINT_GROUP = "headroom.pipeline_extension"
+ENV_VAR = "HEADROOM_PIPELINE_EXTENSIONS"
 
 
 class PipelineStage(str, Enum):
@@ -25,8 +28,10 @@ class PipelineStage(str, Enum):
     INPUT_COMPRESSED = "input_compressed"
     INPUT_REMEMBERED = "input_remembered"
     PRE_SEND = "pre_send"
+    PRE_SEND_PARAMS = "pre_send_params"
     POST_SEND = "post_send"
     RESPONSE_RECEIVED = "response_received"
+    OUTCOME_OBSERVED = "outcome_observed"
 
 
 CANONICAL_PIPELINE_STAGES: tuple[PipelineStage, ...] = (
@@ -39,17 +44,82 @@ CANONICAL_PIPELINE_STAGES: tuple[PipelineStage, ...] = (
     PipelineStage.INPUT_COMPRESSED,
     PipelineStage.INPUT_REMEMBERED,
     PipelineStage.PRE_SEND,
+    PipelineStage.PRE_SEND_PARAMS,
     PipelineStage.POST_SEND,
     PipelineStage.RESPONSE_RECEIVED,
+    PipelineStage.OUTCOME_OBSERVED,
 )
+
+
+@dataclass(frozen=True)
+class OutcomeSnapshot:
+    """What actually happened on one request. Read-only by construction.
+
+    Emitted at :attr:`PipelineStage.OUTCOME_OBSERVED` so an extension can learn
+    from a response — a token ceiling that was hit, an effort setting that did
+    or did not pay off — without being able to rewrite the measurement it is
+    learning from. Extensions declare what they did; the core records what
+    happened; attribution is the core's arithmetic over both.
+
+    ``thinking_tokens`` is ``None`` when the provider reported no split and none
+    could be inferred. That is NOT zero: Anthropic reports no thinking count at
+    all, so treating unknown as zero would credit visible-text levers with
+    reductions that reasoning-effort levers produced.
+    """
+
+    request_id: str = ""
+    provider: str = ""
+    model: str = ""
+    output_tokens: int = 0
+    thinking_tokens: int | None = None
+    thinking_inferred: bool = False
+    stop_reason: str | None = None
+    input_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    turn_index: int = 0
+    transforms_applied: tuple[str, ...] = ()
+
+    @property
+    def truncated(self) -> bool:
+        """Whether a token ceiling cut the response off.
+
+        The one unambiguous, provider-supplied feedback signal available to an
+        adaptive lever — which is why a ceiling can run a closed control loop
+        where verbosity steering (whose signals need transcript inference)
+        cannot.
+        """
+        return self.stop_reason in ("max_tokens", "length")
+
+    @property
+    def visible_output_tokens(self) -> int | None:
+        """Output tokens excluding thinking, or ``None`` when unknown."""
+        if self.thinking_tokens is None:
+            return None
+        return max(0, self.output_tokens - self.thinking_tokens)
 
 
 @dataclass
 class PipelineEvent:
     """Event emitted at a canonical pipeline stage.
 
-    Extensions may mutate ``messages``, ``tools``, ``headers``, or ``metadata`` in
-    place, or return a replacement ``PipelineEvent`` from ``on_pipeline_event``.
+    Extensions may mutate ``messages``, ``tools``, ``headers``, ``body`` or
+    ``metadata`` in place, or return a replacement ``PipelineEvent`` from
+    ``on_pipeline_event``.
+
+    ``body`` carries the outbound provider request itself, and exists because
+    the fields that control what a model *writes* — ``output_config.effort``,
+    ``thinking.budget_tokens``, ``text.verbosity``, ``max_tokens`` — live on the
+    body and on none of the other fields here. Without it this contract could
+    only reach what a model reads.
+
+    Mutating ``body`` at :attr:`PipelineStage.PRE_SEND_PARAMS` is cheap;
+    mutating it anywhere that changes the model, system prompt, tool
+    definitions or message history is not. Those four are the provider's prefix
+    cache key, so changing them mid-conversation invalidates the cached prefix —
+    on a 100k context roughly $0.27 against the ~$0.005 of output a terser
+    instruction saves. Extensions that shape output should decide prompt content
+    once per conversation and vary only the non-cache-key parameters per turn.
     """
 
     stage: PipelineStage
@@ -60,7 +130,9 @@ class PipelineEvent:
     messages: list[dict[str, Any]] | None = None
     tools: list[dict[str, Any]] | None = None
     headers: dict[str, str] | None = None
+    body: dict[str, Any] | None = None
     response: Any = None
+    outcome: OutcomeSnapshot | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -71,15 +143,72 @@ class PipelineExtension(Protocol):
         """Handle a canonical pipeline event."""
 
 
-def discover_pipeline_extensions() -> list[PipelineExtension]:
-    """Load registered pipeline extensions from Python entry points."""
+def _resolve_enabled(enabled: Iterable[str] | None) -> set[str]:
+    """Resolve the enabled entry-point names.
+
+    Precedence: the explicit argument, else ``HEADROOM_PIPELINE_EXTENSIONS``,
+    else nothing. Mirrors :mod:`headroom.proxy.extensions` so operators learn
+    one rule for both seams.
+    """
+    raw: Iterable[str]
+    if enabled is not None:
+        raw = enabled
+    else:
+        raw = (os.environ.get(ENV_VAR) or "").split(",")
+    return {n.strip() for n in raw if n and n.strip()}
+
+
+def discover_pipeline_extensions(
+    enabled: Iterable[str] | None = None,
+) -> list[PipelineExtension]:
+    """Load explicitly-enabled pipeline extensions from Python entry points.
+
+    **Opt-in.** Discovery enumerates every registered entry point, but only
+    those the operator named are loaded. Merely installing a package — as a
+    transitive dependency, say — must not silently start rewriting requests.
+
+    That gate was tolerable to omit when this contract could only touch
+    ``messages``. It is not now: ``PipelineEvent.body`` reaches ``max_tokens``,
+    ``effort`` and the system prompt on live traffic, so an unaudited package in
+    the same environment could change what every request costs and what every
+    model writes. The proxy-extension seam has always worked this way; this
+    brings the pipeline seam in line.
+
+    Extensions passed directly to :class:`PipelineExtensionManager` are
+    unaffected — constructing one and handing it over is already explicit.
+
+    Enable with ``HEADROOM_PIPELINE_EXTENSIONS=name1,name2``; the literal ``*``
+    enables everything discovered (only where every package is trusted).
+    """
 
     discovered: list[PipelineExtension] = []
     try:
-        entries = importlib.metadata.entry_points(group=ENTRY_POINT_GROUP)
+        entries = list(importlib.metadata.entry_points(group=ENTRY_POINT_GROUP))
     except Exception as exc:  # noqa: BLE001 - importlib metadata varies by runtime
         log.debug("pipeline extensions: entry-point enumeration failed: %s", exc)
         return discovered
+
+    enabled_set = _resolve_enabled(enabled)
+    if not enabled_set:
+        if entries:
+            log.info(
+                "pipeline extensions discovered but disabled (opt-in): %s. "
+                "Enable with %s=<name1,name2>.",
+                ",".join(sorted(e.name for e in entries)),
+                ENV_VAR,
+            )
+        return discovered
+
+    wildcard = "*" in enabled_set
+    if not wildcard:
+        missing = enabled_set - {e.name for e in entries}
+        if missing:
+            log.warning(
+                "pipeline extensions requested but not found: %s (available: %s)",
+                ",".join(sorted(missing)),
+                ",".join(sorted(e.name for e in entries)) or "<none>",
+            )
+        entries = [e for e in entries if e.name in enabled_set]
 
     for entry in entries:
         try:
@@ -140,7 +269,9 @@ class PipelineExtensionManager:
         messages: list[dict[str, Any]] | None = None,
         tools: list[dict[str, Any]] | None = None,
         headers: dict[str, str] | None = None,
+        body: dict[str, Any] | None = None,
         response: Any = None,
+        outcome: OutcomeSnapshot | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> PipelineEvent:
         """Emit a canonical lifecycle event and return the final event state."""
@@ -154,7 +285,9 @@ class PipelineExtensionManager:
             messages=messages,
             tools=tools,
             headers=headers,
+            body=body,
             response=response,
+            outcome=outcome,
             metadata=metadata or {},
         )
 
