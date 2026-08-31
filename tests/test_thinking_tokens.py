@@ -176,3 +176,49 @@ class TestRequestOutcome:
 
     def test_turn_index_round_trips(self):
         assert self._outcome(turn_index=7).turn_index == 7
+
+
+class TestHandlerWiring:
+    """The handler helper must actually produce a count.
+
+    These exist because the first implementation called ``Tokenizer()`` with no
+    arguments — a TypeError, swallowed by the helper's own ``except``, so every
+    Anthropic response silently reported "unknown" forever. Unit tests passed
+    throughout, because they inject their own estimator and never exercise the
+    real one. Only an end-to-end assertion on the helper catches that.
+    """
+
+    def test_helper_returns_an_inferred_count_for_thinking_blocks(self):
+        from headroom.proxy.handlers.anthropic import _thinking_tokens_for
+
+        payload = {
+            "content": [
+                {"type": "thinking", "thinking": "Let me read the parser before editing it."},
+                {"type": "text", "text": "done"},
+            ]
+        }
+        result = _thinking_tokens_for(payload)
+        assert result.tokens is not None, "the real estimator must be wired, not silently absent"
+        assert result.tokens > 0
+        assert result.inferred is True
+
+    def test_helper_reports_a_real_zero_when_nothing_was_thought(self):
+        from headroom.proxy.handlers.anthropic import _thinking_tokens_for
+
+        result = _thinking_tokens_for({"content": [{"type": "text", "text": "hi"}]})
+        assert result.tokens == 0
+        assert result.inferred is False
+
+    def test_estimator_is_built_once(self):
+        """AnthropicTokenCounter loads a tiktoken encoding in __init__, so
+        constructing one per request would put a vocab load in the response
+        path."""
+        from headroom.proxy.handlers.anthropic import _thinking_estimator
+
+        assert _thinking_estimator() is _thinking_estimator()
+
+    def test_helper_never_raises_on_junk(self):
+        from headroom.proxy.handlers.anthropic import _thinking_tokens_for
+
+        for junk in (None, "string", 42, [], {"content": "not a list"}):
+            assert _thinking_tokens_for(junk).tokens is None or True

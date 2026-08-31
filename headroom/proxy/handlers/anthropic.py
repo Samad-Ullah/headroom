@@ -12,7 +12,9 @@ import logging
 import os
 import time
 import uuid
+from collections.abc import Callable
 from datetime import datetime
+from functools import lru_cache
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
 
@@ -59,6 +61,35 @@ from headroom.proxy.thinking_tokens import ThinkingTokens, extract_thinking_toke
 logger = logging.getLogger("headroom.proxy")
 
 
+@lru_cache(maxsize=1)
+def _thinking_estimator() -> Callable[[str], int] | None:
+    """A process-wide local token counter for thinking-block estimation.
+
+    Cached because ``AnthropicTokenCounter.__init__`` loads a tiktoken encoding;
+    building one per request would put a vocab load in the response path.
+
+    ``client=None`` is deliberate and load-bearing: with a client the counter
+    calls Anthropic's /v1/messages/count_tokens endpoint, which would turn a
+    bookkeeping field into a network round trip on every response. The local
+    tiktoken approximation is the right trade here — the result is reported as
+    ``inferred`` precisely because it is an approximation. ``warn=False``
+    suppresses the "no client" UserWarning, which is advice for SDK callers and
+    noise for an intentional internal estimate.
+
+    Returns ``None`` when no counter can be built, so the caller reports
+    "unknown" rather than a fabricated zero.
+    """
+    try:
+        from headroom.providers.anthropic import AnthropicTokenCounter
+
+        return AnthropicTokenCounter(
+            "claude-3-5-sonnet-20241022", client=None, warn=False
+        ).count_text
+    except Exception:  # noqa: BLE001 - estimation is optional, never fatal
+        logger.debug("thinking-token estimator unavailable", exc_info=True)
+        return None
+
+
 def _thinking_tokens_for(payload: object) -> ThinkingTokens:
     """Split thinking from visible output for one Anthropic response.
 
@@ -71,9 +102,7 @@ def _thinking_tokens_for(payload: object) -> ThinkingTokens:
     degrade to "unknown" rather than cost the caller their response.
     """
     try:
-        from headroom.tokenizer import Tokenizer
-
-        return extract_thinking_tokens(payload, estimator=Tokenizer().count_text)
+        return extract_thinking_tokens(payload, estimator=_thinking_estimator())
     except Exception:  # noqa: BLE001 - accounting must never break a response
         return ThinkingTokens()
 
@@ -4329,6 +4358,14 @@ class AnthropicHandlerMixin:
                             usage = resp_json.get("usage", {})
                             output_tokens = int(usage.get("output_tokens", 0) or 0)
                             _thinking = _thinking_tokens_for(resp_json)
+                            # The split is measured against the final response
+                            # only. ``output_tokens`` below also absorbs usage
+                            # from hook-triggered calls whose bodies are not
+                            # ``resp_json``, so on those turns any thinking they
+                            # did lands in the visible bucket. Bounded and
+                            # documented rather than threaded through the hook
+                            # accumulator: it affects only hook paths, and the
+                            # Anthropic count is flagged inferred regardless.
                             output_tokens += _hook_usage.output_tokens
                             cr_tokens = int(usage.get("cache_read_input_tokens", 0) or 0)
                             cr_tokens += _hook_usage.cache_read_tokens
