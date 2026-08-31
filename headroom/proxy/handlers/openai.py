@@ -91,6 +91,7 @@ from headroom.proxy.project_context import (
     get_current_project,
     set_current_project,
 )
+from headroom.proxy.thinking_tokens import ThinkingTokens, extract_from_usage
 from headroom.proxy.token_counting import gemini_output_tokens
 
 logger = logging.getLogger("headroom.proxy")
@@ -4734,6 +4735,7 @@ class OpenAIHandlerMixin:
                     # matching the streaming path and the guarded cache keys below
                     # (same class as the gemini fix in #2347).
                     output_tokens = _usage_int(usage.get("completion_tokens"))
+                    _thinking = extract_from_usage(usage)
                     total_input_tokens = _usage_int(usage.get("prompt_tokens")) or optimized_tokens
 
                     # Cache stats: prefer the Anthropic/Bedrock top-level
@@ -4808,6 +4810,8 @@ class OpenAIHandlerMixin:
                             optimized_tokens=optimized_tokens,
                             provider_input_tokens=total_input_tokens,
                             output_tokens=output_tokens,
+                            thinking_tokens=_thinking.tokens,
+                            thinking_inferred=_thinking.inferred,
                             tokens_saved=tokens_saved,
                             attempted_input_tokens=optimized_tokens + tokens_saved,
                             cache_read_tokens=cache_read_tokens,
@@ -5094,6 +5098,10 @@ class OpenAIHandlerMixin:
                         except Exception as dump_err:
                             logger.error(f"[{request_id}] Failed to write debug dump: {dump_err}")
 
+                # Bound here so the RequestOutcome emit below can never hit an
+                # unbound name on an except or early-exit path — an accounting
+                # field must not be able to 500 a live request.
+                _thinking = ThinkingTokens()
                 total_latency = (time.time() - start_time) * 1000
 
                 total_input_tokens = optimized_tokens  # fallback
@@ -5110,6 +5118,7 @@ class OpenAIHandlerMixin:
                     # request (same class as the gemini fix in #2347).
                     total_input_tokens = _usage_int(usage.get("prompt_tokens")) or optimized_tokens
                     output_tokens = _usage_int(usage.get("completion_tokens"))
+                    _thinking = extract_from_usage(usage)
                     # OpenAI returns cached_tokens in prompt_tokens_details
                     # These are charged at 50% of the input price
                     prompt_details = usage.get("prompt_tokens_details") or {}
@@ -5271,6 +5280,8 @@ class OpenAIHandlerMixin:
                         optimized_tokens=optimized_tokens,
                         provider_input_tokens=total_input_tokens,
                         output_tokens=output_tokens,
+                        thinking_tokens=_thinking.tokens,
+                        thinking_inferred=_thinking.inferred,
                         tokens_saved=tokens_saved,
                         attempted_input_tokens=optimized_tokens + tokens_saved,
                         cache_read_tokens=cache_read_tokens,
@@ -6214,6 +6225,10 @@ class OpenAIHandlerMixin:
                             headers={**adapted_headers, "content-type": "application/json"},
                         )
 
+                    # Bound here so the RequestOutcome emit below can never hit an
+                    # unbound name on an except or early-exit path — an accounting
+                    # field must not be able to 500 a live request.
+                    _thinking = ThinkingTokens()
                     total_input_tokens = original_tokens  # fallback
                     output_tokens = 0
                     cache_read_tokens = 0
@@ -6233,6 +6248,7 @@ class OpenAIHandlerMixin:
                             original_tokens,
                         )
                         output_tokens = _usage_int(usage.get("output_tokens"))
+                        _thinking = extract_from_usage(usage)
                         details = usage.get("input_tokens_details")
                         if isinstance(details, dict):
                             cache_read_tokens = _usage_int(details.get("cached_tokens"))
@@ -6480,6 +6496,8 @@ class OpenAIHandlerMixin:
                             optimized_tokens=effective_optimized_tokens,
                             provider_input_tokens=total_input_tokens,
                             output_tokens=output_tokens,
+                            thinking_tokens=_thinking.tokens,
+                            thinking_inferred=_thinking.inferred,
                             tokens_saved=tokens_saved,
                             attempted_input_tokens=attempted_input_tokens,
                             cache_read_tokens=cache_read_tokens,

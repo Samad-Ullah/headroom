@@ -54,8 +54,28 @@ from headroom.proxy.memory_query import MemoryQuery
 from headroom.proxy.model_router import estimate_input_tokens
 from headroom.proxy.nonstream_sse_policy import should_recover_sse_reply
 from headroom.proxy.outcome import RequestOutcome
+from headroom.proxy.thinking_tokens import ThinkingTokens, extract_thinking_tokens
 
 logger = logging.getLogger("headroom.proxy")
+
+
+def _thinking_tokens_for(payload: object) -> ThinkingTokens:
+    """Split thinking from visible output for one Anthropic response.
+
+    Anthropic reports no thinking count in ``usage``, so the count is derived
+    from the response's own thinking blocks and marked inferred. Without the
+    split, reasoning-effort routing and verbosity steering move the same
+    counter and neither can be attributed.
+
+    Never raises: token accounting is bookkeeping, and a failure here must
+    degrade to "unknown" rather than cost the caller their response.
+    """
+    try:
+        from headroom.tokenizer import Tokenizer
+
+        return extract_thinking_tokens(payload, estimator=Tokenizer().count_text)
+    except Exception:  # noqa: BLE001 - accounting must never break a response
+        return ThinkingTokens()
 
 
 def _is_googleapis_endpoint(value: object) -> bool:
@@ -3353,6 +3373,7 @@ class AnthropicHandlerMixin:
                         # the arithmetic below (and ``RequestOutcome``) never sees
                         # ``None`` — matching the direct-Anthropic path.
                         output_tokens = int(usage.get("output_tokens", 0) or 0)
+                        _thinking = _thinking_tokens_for(backend_response.body)
 
                         _backend_name = request_backend.name if request_backend else "anthropic"
                         # Eligible-only denominator for the active
@@ -3462,6 +3483,8 @@ class AnthropicHandlerMixin:
                                 cache_write_5m_tokens=cw_5m_tokens,
                                 cache_write_1h_tokens=cw_1h_tokens,
                                 uncached_input_tokens=uncached_input_tokens,
+                                thinking_tokens=_thinking.tokens,
+                                thinking_inferred=_thinking.inferred,
                                 total_latency_ms=total_latency,
                                 overhead_ms=optimization_latency,
                                 pipeline_timing=pipeline_timing,
@@ -4298,9 +4321,14 @@ class AnthropicHandlerMixin:
                         cw_5m_tokens = 0
                         cw_1h_tokens = 0
                         uncached_input_tokens = 0
+                        # Bound before the block below so the RequestOutcome emit can never
+                        # hit an unbound name on an early-exit or except path — an
+                        # accounting field must not be able to 500 a live request.
+                        _thinking = ThinkingTokens()
                         if resp_json:
                             usage = resp_json.get("usage", {})
                             output_tokens = int(usage.get("output_tokens", 0) or 0)
+                            _thinking = _thinking_tokens_for(resp_json)
                             output_tokens += _hook_usage.output_tokens
                             cr_tokens = int(usage.get("cache_read_input_tokens", 0) or 0)
                             cr_tokens += _hook_usage.cache_read_tokens
@@ -4477,6 +4505,8 @@ class AnthropicHandlerMixin:
                                 cache_write_5m_tokens=cw_5m_tokens,
                                 cache_write_1h_tokens=cw_1h_tokens,
                                 uncached_input_tokens=uncached_input_tokens,
+                                thinking_tokens=_thinking.tokens,
+                                thinking_inferred=_thinking.inferred,
                                 total_latency_ms=total_latency,
                                 overhead_ms=optimization_latency,
                                 pipeline_timing=pipeline_timing,
