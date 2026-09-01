@@ -191,28 +191,67 @@ class BaselineModel:
 # new install has none. Without these the dashboard shows a dash forever while
 # real tokens are being saved.
 #
-# Measured 2026-08-31: 5 agent-shaped tasks x 4 levels x 3 repeats, on
-# claude-sonnet-5 and gpt-5.2. Per-level overall reduction:
+# L3 -- measured 2026-09-01 on SWE-bench Verified. 12 instances carrying the
+# real source files the gold patch touches (6k-48k chars of context each),
+# stratified by the dataset's own difficulty label, run at L0 and L3 against
+# six models. Paired on instance, so between-task variance drops out; pairs
+# where either arm hit the token ceiling are excluded, since a capped
+# response's length is the ceiling rather than a choice.
 #
-#     level   claude-sonnet-5   gpt-5.2
+#     family      models  pairs   overall reduction
+#     Anthropic        3     33               18.2%
+#     OpenAI           3     28               31.2%
+#
+#     61 usable pairs, median +31.8%, mean +23.0%, 6/6 models positive in
+#     sign, 13% of individual pairs negative.
+#
+# POWER. All six are positive, but they are not equally established. Per-model
+# mean paired delta, standard error, and t:
+#
+#     gpt-5.6-luna      +33.3%   SE  5.5   t=6.0   solid
+#     gpt-5.6-terra     +30.2%   SE 10.0   t=3.0   solid (n=4, 8 truncated)
+#     claude-sonnet-5   +32.3%   SE 12.1   t=2.7   solid
+#     gpt-5.6-sol       +21.4%   SE 16.0   t=1.3   not distinguishable from 0
+#     claude-haiku-4-5  +14.5%   SE 11.1   t=1.3   not distinguishable from 0
+#     claude-opus-5     +11.7%   SE 16.0   t=0.7   not distinguishable from 0
+#
+#     pooled n=61: +23.0%, SE 5.3, t=4.4 -- 95% CI roughly [12.6%, 33.4%]
+#
+# The aggregate effect is real; three individual models are single-sample-
+# per-instance measurements against a model whose unsteered output varies by a
+# median 33% run to run (measured directly by re-running the L0 arm), so 12
+# pairs cannot resolve an effect of that size. The band below sits inside the
+# pooled CI, which is the claim that is actually supported. Do not quote a
+# single-model figure from this table as established.
+#
+# These supersede an earlier 5-task toy benchmark that put L3 at (0.336,
+# 0.738). That figure was wrong twice over: it rested on five synthetic prompts
+# rather than real repository context, and it measured a version of the L3
+# string that has since changed twice. It over-reported by roughly 2x at the
+# optimistic end, which is the direction that matters -- the dashboard was
+# flattering itself.
+#
+# L2 and L4 are still from that toy benchmark and are therefore NOT comparable
+# to L3's numbers; they are retained only because a stale estimate at a level
+# nobody defaults to beats no estimate at all. Re-measure before trusting them.
+#
+#     level   claude-sonnet-5   gpt-5.2      (toy benchmark, 2026-08-31)
 #     L2               22.6%      10.0%
-#     L3               73.8%      33.6%
 #     L4               73.8%      42.6%
 #
-# The value below is the LOWER of the two, deliberately: a savings number that
-# flatters is worse than one that under-reports, and the spread between two
-# models on five tasks is the honest width of what we know. L1 is absent
-# because it was never measured -- an absent level yields no estimate rather
-# than an invented one.
+# The value below is the LOWER of the two families/providers, deliberately: a
+# savings number that flatters is worse than one that under-reports, and the
+# spread is the honest width of what we know. L1 is absent because it was never
+# measured -- an absent level yields no estimate rather than an invented one.
 #
 # This is the weakest of the tiers and is labelled ``modelled`` to say so: it
 # is not this deployment's traffic. Any real holdout or learned baseline
 # supersedes it automatically in :meth:`SavingsLedger.best_estimate`.
 MODELLED_REDUCTION: dict[int, tuple[float, float]] = {
-    # level: (conservative, optimistic) -- the two measured providers
-    2: (0.100, 0.226),
-    3: (0.336, 0.738),
-    4: (0.426, 0.738),
+    # level: (conservative, optimistic)
+    2: (0.100, 0.226),   # toy benchmark -- stale, see above
+    3: (0.182, 0.312),   # SWE-bench Verified, 61 paired samples, 6 models
+    4: (0.426, 0.738),   # toy benchmark -- stale, see above
 }
 
 
@@ -348,8 +387,8 @@ class SavingsLedger:
         The arithmetic is the part worth getting right. Observed output is
         already POST-shaping, so the saving is not ``observed x r``. If the
         unshaped response would have been ``U`` and we observed
-        ``O = U(1-r)``, then ``saved = U - O = O * r/(1-r)``. At r=0.336 that
-        is 0.506 of observed, not 0.336 -- understating by a third if done the
+        ``O = U(1-r)``, then ``saved = U - O = O * r/(1-r)``. At r=0.182 that
+        is 0.222 of observed, not 0.182 -- understating by a fifth if done the
         naive way.
         """
         factors = MODELLED_REDUCTION.get(level)

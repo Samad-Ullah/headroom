@@ -601,13 +601,21 @@ class TestModelledTier:
     def test_saving_inverts_the_reduction_rather_than_scaling_by_it(self):
         """Observed output is POST-shaping, so saved is observed*r/(1-r).
 
-        The naive observed*r understates by a third at r=0.336. This is the
-        single arithmetic mistake the tier can make, so it is pinned.
+        The naive observed*r understates the saving. This is the single
+        arithmetic mistake the tier can make, so it is pinned.
+
+        r is read from the table rather than hardcoded: the factors are
+        re-measured whenever the steering text changes, and a test that
+        snapshots them fails on every remeasure while testing nothing about
+        the arithmetic it exists to protect.
         """
+        from headroom.proxy.output_savings import MODELLED_REDUCTION
+
         ledger = self._ledger_with(10_000, 10)
         est = ledger.estimate_from_model(3)
         assert est is not None
-        r = 0.336
+        r = MODELLED_REDUCTION[3][0]
+        assert 0 < r < 1, "a reduction factor outside (0,1) makes the inversion nonsense"
         assert est.tokens_saved == pytest.approx(10_000 * r / (1 - r), rel=1e-6)
         assert est.tokens_saved > 10_000 * r, "naive scaling would understate"
         # baseline = what the unshaped run would have emitted
@@ -618,10 +626,14 @@ class TestModelledTier:
         assert est is not None and est.kind == "modelled"
 
     def test_band_is_the_two_provider_spread(self):
+        from headroom.proxy.output_savings import MODELLED_REDUCTION
+
+        low, high = MODELLED_REDUCTION[3]
         est = self._ledger_with(5_000, 5).estimate_from_model(3)
         assert est is not None
-        assert est.ci_low_pct == pytest.approx(33.6)
-        assert est.ci_high_pct == pytest.approx(73.8)
+        assert est.ci_low_pct == pytest.approx(low * 100)
+        assert est.ci_high_pct == pytest.approx(high * 100)
+        assert low <= high, "conservative end must not exceed the optimistic one"
         assert est.pct == est.ci_low_pct, "headline uses the conservative end"
 
     def test_unbenchmarked_level_yields_nothing_rather_than_a_guess(self):
