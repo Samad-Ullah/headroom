@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from headroom.proxy.output_savings import (
     BaselineModel,
     SavingsLedger,
@@ -573,3 +575,79 @@ class TestFlushDurability:
         loop_thread = threading.get_ident()
         assert saved_on_threads, "flush never ran"
         assert all(t != loop_thread for t in saved_on_threads)
+
+
+class TestModelledTier:
+    """The fallback for a deployment with no counterfactual of its own.
+
+    Every fresh install is in this state: `learn --verbosity` builds its
+    baseline from session history that predates the shaper, and a new install
+    has none, so without this tier the dashboard reads "—" forever while real
+    tokens are being saved.
+    """
+
+    @staticmethod
+    def _ledger_with(observed_total: int, n: int):
+        from headroom.proxy.output_savings import SavingsLedger, stratum_key
+
+        ledger = SavingsLedger()
+        key = stratum_key(
+            turn_kind="new_user_ask", input_tokens=1000, model="claude-sonnet-5", has_tools=False
+        )
+        for _ in range(n):
+            ledger.record("treatment", key, observed_total // n)
+        return ledger
+
+    def test_saving_inverts_the_reduction_rather_than_scaling_by_it(self):
+        """Observed output is POST-shaping, so saved is observed*r/(1-r).
+
+        The naive observed*r understates by a third at r=0.336. This is the
+        single arithmetic mistake the tier can make, so it is pinned.
+        """
+        ledger = self._ledger_with(10_000, 10)
+        est = ledger.estimate_from_model(3)
+        assert est is not None
+        r = 0.336
+        assert est.tokens_saved == pytest.approx(10_000 * r / (1 - r), rel=1e-6)
+        assert est.tokens_saved > 10_000 * r, "naive scaling would understate"
+        # baseline = what the unshaped run would have emitted
+        assert est.baseline_tokens == pytest.approx(10_000 + est.tokens_saved, rel=1e-6)
+
+    def test_kind_is_modelled_so_the_ui_can_refuse_to_call_it_a_ci(self):
+        est = self._ledger_with(5_000, 5).estimate_from_model(3)
+        assert est is not None and est.kind == "modelled"
+
+    def test_band_is_the_two_provider_spread(self):
+        est = self._ledger_with(5_000, 5).estimate_from_model(3)
+        assert est is not None
+        assert est.ci_low_pct == pytest.approx(33.6)
+        assert est.ci_high_pct == pytest.approx(73.8)
+        assert est.pct == est.ci_low_pct, "headline uses the conservative end"
+
+    def test_unbenchmarked_level_yields_nothing_rather_than_a_guess(self):
+        assert self._ledger_with(5_000, 5).estimate_from_model(1) is None
+
+    def test_no_traffic_yields_nothing(self):
+        from headroom.proxy.output_savings import SavingsLedger
+
+        assert SavingsLedger().estimate_from_model(3) is None
+
+    def test_a_real_baseline_supersedes_the_model(self):
+        """The modelled tier is last resort; a learned baseline outranks it."""
+        from headroom.proxy.output_savings import BaselineModel, SavingsLedger, stratum_key
+
+        key = stratum_key(
+            turn_kind="new_user_ask", input_tokens=1000, model="claude-sonnet-5", has_tools=False
+        )
+        baseline = BaselineModel()
+        for _ in range(50):
+            baseline.observe(key, 2000)
+        ledger = SavingsLedger(baseline=baseline)
+        for _ in range(10):
+            ledger.record("treatment", key, 1000)
+        assert ledger.best_estimate(3).kind == "estimated"
+
+    def test_without_a_level_behaviour_is_unchanged(self):
+        """Existing callers that pass no level must not silently gain a number."""
+        est = self._ledger_with(5_000, 5).best_estimate()
+        assert est.kind == "estimated" and est.n_requests == 0

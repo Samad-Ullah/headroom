@@ -202,7 +202,7 @@ class TestShapeResponsesRequest:
         body = _mechanical_body()
         result = shape_responses_request(body, OutputShaperSettings(enabled=True))
         assert result.changed is True
-        assert "output_shaper:verbosity:L2" in (result.labels or [])
+        assert "output_shaper:verbosity:L3" in (result.labels or [])
         assert body["reasoning"]["effort"] == "high", "reasoning.effort is left alone now"
         assert body["instructions"].startswith("You are Codex.")
 
@@ -217,7 +217,7 @@ class TestShapeResponsesRequest:
         result = shape_responses_request(body, OutputShaperSettings(enabled=True))
         assert result.changed is True
         assert body["reasoning"]["effort"] == "high"
-        assert result.labels == ["output_shaper:verbosity:L2"]
+        assert result.labels == ["output_shaper:verbosity:L3"]
 
 
 # ---------------------------------------------------------------------------

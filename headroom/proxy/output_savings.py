@@ -185,6 +185,37 @@ class BaselineModel:
         return self.glob.n
 
 
+# Benchmark-derived reduction factors, used ONLY when a deployment has neither
+# a holdout nor a learned baseline -- which is every fresh install, because
+# ``learn --verbosity`` needs session history that predates the shaper and a
+# new install has none. Without these the dashboard shows a dash forever while
+# real tokens are being saved.
+#
+# Measured 2026-08-31: 5 agent-shaped tasks x 4 levels x 3 repeats, on
+# claude-sonnet-5 and gpt-5.2. Per-level overall reduction:
+#
+#     level   claude-sonnet-5   gpt-5.2
+#     L2               22.6%      10.0%
+#     L3               73.8%      33.6%
+#     L4               73.8%      42.6%
+#
+# The value below is the LOWER of the two, deliberately: a savings number that
+# flatters is worse than one that under-reports, and the spread between two
+# models on five tasks is the honest width of what we know. L1 is absent
+# because it was never measured -- an absent level yields no estimate rather
+# than an invented one.
+#
+# This is the weakest of the tiers and is labelled ``modelled`` to say so: it
+# is not this deployment's traffic. Any real holdout or learned baseline
+# supersedes it automatically in :meth:`SavingsLedger.best_estimate`.
+MODELLED_REDUCTION: dict[int, tuple[float, float]] = {
+    # level: (conservative, optimistic) -- the two measured providers
+    2: (0.100, 0.226),
+    3: (0.336, 0.738),
+    4: (0.426, 0.738),
+}
+
+
 @dataclass
 class SavingsEstimate:
     """Result of an estimation pass."""
@@ -195,7 +226,9 @@ class SavingsEstimate:
     ci_low_pct: float
     ci_high_pct: float
     n_requests: int
-    kind: str  # "estimated" (synthetic control) or "measured" (A/B holdout)
+    # "measured" (A/B holdout) > "estimated" (synthetic control) >
+    # "modelled" (benchmark default factor -- not this deployment's traffic)
+    kind: str
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -305,10 +338,71 @@ class SavingsLedger:
             kind=kind,
         )
 
-    def best_estimate(self) -> SavingsEstimate:
-        """Prefer the measured A/B number; fall back to the baseline estimate."""
+    def estimate_from_model(self, level: int) -> SavingsEstimate | None:
+        """Weakest tier: apply a benchmark factor to observed treatment output.
+
+        Used only when this deployment has produced no counterfactual of its
+        own. Returns ``None`` for a level that was never benchmarked, so an
+        unmeasured level shows nothing rather than a guess.
+
+        The arithmetic is the part worth getting right. Observed output is
+        already POST-shaping, so the saving is not ``observed x r``. If the
+        unshaped response would have been ``U`` and we observed
+        ``O = U(1-r)``, then ``saved = U - O = O * r/(1-r)``. At r=0.336 that
+        is 0.506 of observed, not 0.336 -- understating by a third if done the
+        naive way.
+        """
+        factors = MODELLED_REDUCTION.get(level)
+        if factors is None:
+            return None
+        observed = 0.0
+        n_requests = 0
+        for acc in self.treatment.values():
+            if acc.n == 0:
+                continue
+            observed += acc.n * acc.mean
+            n_requests += acc.n
+        if n_requests == 0 or observed <= 0:
+            return None
+
+        def saved_for(r: float) -> float:
+            return observed * r / (1.0 - r)
+
+        lo_r, hi_r = factors
+        saved = saved_for(lo_r)
+        baseline = observed + saved
+        # The band is the spread between the two benchmarked models, NOT a
+        # sampling CI -- there is no sample here. Callers must not label it
+        # "95% CI"; the dashboard branches on kind for exactly this reason.
+        lo_pct = lo_r * 100.0
+        hi_pct = hi_r * 100.0
+        return SavingsEstimate(
+            tokens_saved=saved,
+            baseline_tokens=baseline,
+            pct=lo_pct,
+            ci_low_pct=lo_pct,
+            ci_high_pct=hi_pct,
+            n_requests=n_requests,
+            kind="modelled",
+        )
+
+    def best_estimate(self, level: int | None = None) -> SavingsEstimate:
+        """Strongest available tier: measured > estimated > modelled.
+
+        ``level`` enables the modelled fallback; without it the behaviour is
+        unchanged from before, which keeps every existing caller honest.
+        """
         measured = self.estimate_from_holdout()
-        return measured if measured is not None else self.estimate_from_baseline()
+        if measured is not None:
+            return measured
+        estimated = self.estimate_from_baseline()
+        if estimated.n_requests > 0:
+            return estimated
+        if level is not None:
+            modelled = self.estimate_from_model(level)
+            if modelled is not None:
+                return modelled
+        return estimated
 
     # ---- persistence -----------------------------------------------------
 
@@ -475,10 +569,10 @@ class SavingsRecorder:
         with self._lock:
             self._flush_locked()
 
-    def estimate(self) -> SavingsEstimate:
+    def estimate(self, level: int | None = None) -> SavingsEstimate:
         with self._lock:
             self._reload_baseline_locked()
-            return self._ledger.best_estimate()
+            return self._ledger.best_estimate(level)
 
 
 _RECORDER: SavingsRecorder | None = None

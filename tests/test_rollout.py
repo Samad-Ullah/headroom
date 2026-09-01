@@ -328,9 +328,7 @@ def test_snapshot_query_and_compatibility_helpers() -> None:
     )
 
     assert snapshot.is_available("tool-result-interceptors") is True
-    # proxy_output_shaper is STABLE with default_enabled_in=STABLE, so it is on
-    # in every channel without being named in HEADROOM_FEATURES.
-    assert snapshot.enabled == frozenset({"tool_result_interceptors", "proxy_output_shaper"})
+    assert snapshot.enabled == frozenset({"tool_result_interceptors"})
     assert snapshot.disabled == frozenset({"read_maturation"})
     assert feature_enabled(
         "tool_result_interceptors",

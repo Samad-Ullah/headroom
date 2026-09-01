@@ -180,10 +180,10 @@ class TestShapeRequest:
         }
         result = shape_request(body, ENABLED)
         assert result.changed is True
-        assert result.labels == ["output_shaper:verbosity:L2"]
+        assert result.labels == ["output_shaper:verbosity:L3"]
         assert body["output_config"]["effort"] == "xhigh", "must not touch effort"
         assert body["thinking"] == {"type": "adaptive"}, "must not touch thinking"
-        assert body["system"][1]["text"] == steering_text(2)
+        assert body["system"][1]["text"] == steering_text(3)
 
     def test_new_ask_gets_steering_but_keeps_effort(self):
         body = {
@@ -192,7 +192,7 @@ class TestShapeRequest:
             "output_config": {"effort": "xhigh"},
         }
         result = shape_request(body, ENABLED)
-        assert result.labels == ["output_shaper:verbosity:L2"]
+        assert result.labels == ["output_shaper:verbosity:L3"]
         assert body["output_config"]["effort"] == "xhigh"
 
     def test_second_pass_is_stable(self):
@@ -282,8 +282,8 @@ class TestShapeOpenAIChatRequest:
         }
         result = shape_openai_chat_request(body, ENABLED)
         assert result.changed is True
-        assert result.labels == ["output_shaper:verbosity:L2"]
-        assert steering_text(2) in body["messages"][0]["content"]
+        assert result.labels == ["output_shaper:verbosity:L3"]
+        assert steering_text(3) in body["messages"][0]["content"]
         # User turn is untouched.
         assert body["messages"][1] == {"role": "user", "content": "hi"}
 
@@ -303,14 +303,9 @@ class TestShapeOpenAIChatRequest:
 
 
 class TestShaperEnabledFor:
-    """The gate that makes default-on safe.
-
-    Output shaping is independent of input compression on purpose, so
-    ``optimize=False`` must not veto a shaper the operator explicitly asked
-    for. But once the feature defaults on, ``optimize=False`` with no explicit
-    request has to stay byte-faithful: shaping appends a steering block to the
-    system tail, and on a body with no ``system`` field it creates one.
-    """
+    """The gate. Steering is opt-in: it appends a block to the system prompt,
+    and at L3 that is a visible behaviour change, so a user who did not ask
+    for it must not get it."""
 
     @staticmethod
     def _config(*, optimize: bool, env: dict[str, str] | None = None):
@@ -320,25 +315,25 @@ class TestShaperEnabledFor:
 
         return SimpleNamespace(optimize=optimize, rollout=resolve_rollout(env or {}))
 
-    def test_default_on_shapes_when_optimizing(self):
+    def test_off_without_an_explicit_opt_in(self):
         from headroom.proxy.output_shaper import shaper_enabled_for
 
-        assert shaper_enabled_for(self._config(optimize=True)) is True
+        assert shaper_enabled_for(self._config(optimize=True)) is False
 
-    def test_default_on_does_not_shape_when_optimize_is_off(self):
-        """The byte-faithful invariant: transforms off means bytes unchanged."""
+    def test_on_when_explicitly_enabled(self):
         from headroom.proxy.output_shaper import shaper_enabled_for
 
-        assert shaper_enabled_for(self._config(optimize=False)) is False
+        cfg = self._config(optimize=True, env={"HEADROOM_OUTPUT_SHAPER": "1"})
+        assert shaper_enabled_for(cfg) is True
 
     def test_explicit_request_shapes_even_with_optimize_off(self):
-        """Shaping without compression is a supported combination."""
+        """Shaping without input compression is a supported combination."""
         from headroom.proxy.output_shaper import shaper_enabled_for
 
         cfg = self._config(optimize=False, env={"HEADROOM_OUTPUT_SHAPER": "1"})
         assert shaper_enabled_for(cfg) is True
 
-    def test_kill_switch_wins_over_everything(self):
+    def test_kill_switch_wins(self):
         from headroom.proxy.output_shaper import shaper_enabled_for
 
         for env in (
@@ -346,6 +341,32 @@ class TestShaperEnabledFor:
             {"HEADROOM_DISABLE_FEATURES": "proxy_output_shaper"},
         ):
             assert shaper_enabled_for(self._config(optimize=True, env=env)) is False
+
+    def test_default_on_would_still_respect_optimize_off(self, monkeypatch):
+        """A guard for a default that does not exist yet.
+
+        The feature is opt-in, so `reason is DEFAULT` with `enabled` true
+        cannot currently occur. The branch is kept because turning the default
+        back on would otherwise silently reintroduce the byte-faithful
+        forwarding bug: an operator running `optimize=False` would start
+        getting a steering block appended, and on a body with no `system`
+        field, one created.
+        """
+        from headroom.proxy.output_shaper import shaper_enabled_for
+        from headroom.rollout import FeatureDecisionReason
+
+        class _Decision:
+            enabled = True
+            reason = FeatureDecisionReason.DEFAULT
+
+        class _Rollout:
+            def decision(self, name):
+                return _Decision()
+
+        from types import SimpleNamespace
+
+        assert shaper_enabled_for(SimpleNamespace(optimize=False, rollout=_Rollout())) is False
+        assert shaper_enabled_for(SimpleNamespace(optimize=True, rollout=_Rollout())) is True
 
     def test_no_rollout_snapshot_falls_back_to_the_env_var(self):
         """SDK/test callers build a config without a snapshot; returning None

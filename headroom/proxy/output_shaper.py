@@ -85,7 +85,7 @@ class OutputShaperSettings:
     """Output-shaping settings with rollout enablement injected by the proxy."""
 
     enabled: bool = False
-    verbosity_level: int = 2
+    verbosity_level: int = 3
     # False in ``mode="cache"``. Steering is the one lever that writes into the
     # provider prefix-cache key (it appends to the system-prompt tail, and on a
     # body with no system field it creates one); effort routing and the
@@ -110,7 +110,7 @@ class OutputShaperSettings:
                 "yes",
             )
         try:
-            level = int(runtime_env.getenv("HEADROOM_VERBOSITY_LEVEL", "2"))
+            level = int(runtime_env.getenv("HEADROOM_VERBOSITY_LEVEL", "3"))
         except ValueError:
             level = 2
         level = max(0, min(4, level))

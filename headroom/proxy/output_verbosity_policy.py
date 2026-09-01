@@ -10,6 +10,21 @@ STEERING_SUFFIX = "</headroom_output_shaping>"
 # Levels are cumulative: each includes everything above it. Text must stay
 # byte-stable across releases for prefix-cache friendliness; edits to these
 # strings are cache-busting changes.
+#
+# L3 and L4 carry two rules L1/L2 do not, because only they instruct the model
+# to drop content rather than ceremony:
+#
+#   * A verbatim list. "Omit rationale" and "fragments fine" invite a model to
+#     paraphrase an error string or round a number. The dangerous case is a
+#     dropped negation -- losing "not" from "does not retry" inverts the
+#     answer while making it shorter, which is exactly what the instruction
+#     rewards.
+#   * A clarity exception. Without it these levels are tersest precisely where
+#     terseness is most costly: destructive actions, security warnings, and
+#     multi-step sequences.
+#
+# L1/L2 only forbid preamble and restating context, so they carry neither --
+# every token in this block is paid on every request of every conversation.
 VERBOSITY_LEVELS = {
     1: (
         "Skip preamble and postamble. Do not announce what you are about to "
@@ -26,12 +41,20 @@ VERBOSITY_LEVELS = {
         "diffs, or tool output already in this conversation — reference by "
         "path and line. Give conclusions only; omit rationale unless the user "
         "asks why. Prefer the smallest edit over rewriting whole files. Keep "
-        "prose to the minimum needed to be unambiguous."
+        "prose to the minimum needed to be unambiguous. Reproduce code, error "
+        "strings, numbers, units, and API or CLI names exactly, and never drop "
+        "a negation (not, never, no, only, except) to save words. Use full "
+        "prose for destructive or irreversible actions, security warnings, and "
+        "any multi-step sequence where brevity would create ambiguity."
     ),
     4: (
         "Minimum tokens. Fragments fine. No preamble, no postamble, no "
         "restating context, no rationale. Answer, smallest-possible edits, "
-        "nothing else."
+        "nothing else. Reproduce code, error strings, numbers, units, and API "
+        "or CLI names exactly, and never drop a negation (not, never, no, "
+        "only, except). Use full prose for destructive or irreversible "
+        "actions, security warnings, and any multi-step sequence where "
+        "brevity would create ambiguity."
     ),
 }
 
