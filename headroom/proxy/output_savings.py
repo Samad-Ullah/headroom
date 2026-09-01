@@ -185,74 +185,52 @@ class BaselineModel:
         return self.glob.n
 
 
-# Benchmark-derived reduction factors, used ONLY when a deployment has neither
-# a holdout nor a learned baseline -- which is every fresh install, because
-# ``learn --verbosity`` needs session history that predates the shaper and a
-# new install has none. Without these the dashboard shows a dash forever while
-# real tokens are being saved.
+# Benchmark-derived reduction factors, consulted ONLY when a deployment has
+# neither a holdout nor a learned baseline.
 #
-# L3 -- measured 2026-09-01 on SWE-bench Verified. 12 instances carrying the
-# real source files the gold patch touches (6k-48k chars of context each),
-# stratified by the dataset's own difficulty label, run at L0 and L3 against
-# six models. Paired on instance, so between-task variance drops out; pairs
-# where either arm hit the token ceiling are excluded, since a capped
-# response's length is the ceiling rather than a choice.
+# THIS TABLE SHIPS EMPTY, AND THAT IS THE INTENDED OPEN-SOURCE BEHAVIOUR.
+# Headroom can apply verbosity steering out of the box -- set
+# ``HEADROOM_VERBOSITY_LEVEL`` and the tokens are really saved. What it cannot
+# do out of the box is tell you HOW MUCH it saved without measuring your own
+# traffic, because a credible factor is not a constant: it depends on the model
+# family, the shape of the turn, and the exact steering text, and producing one
+# means running a paired benchmark across models and paying for both arms.
 #
-#     family      models  pairs   overall reduction
-#     Anthropic        3     33               18.2%
-#     OpenAI           3     28               31.2%
+# Two ways to populate it, in order of strength:
 #
-#     61 usable pairs, median +31.8%, mean +23.0%, 6/6 models positive in
-#     sign, 13% of individual pairs negative.
+#   1. Run a holdout. ``SavingsLedger.estimate_from_holdout`` measures YOUR
+#      traffic and outranks anything here -- see :meth:`best_estimate`. This is
+#      the honest answer and it needs no factor table at all.
+#   2. Register factors from a benchmark, via :func:`register_modelled_factors`.
+#      An extension that has done the measurement can install them at startup.
 #
-# POWER. All six are positive, but they are not equally established. Per-model
-# mean paired delta, standard error, and t:
-#
-#     gpt-5.6-luna      +33.3%   SE  5.5   t=6.0   solid
-#     gpt-5.6-terra     +30.2%   SE 10.0   t=3.0   solid (n=4, 8 truncated)
-#     claude-sonnet-5   +32.3%   SE 12.1   t=2.7   solid
-#     gpt-5.6-sol       +21.4%   SE 16.0   t=1.3   not distinguishable from 0
-#     claude-haiku-4-5  +14.5%   SE 11.1   t=1.3   not distinguishable from 0
-#     claude-opus-5     +11.7%   SE 16.0   t=0.7   not distinguishable from 0
-#
-#     pooled n=61: +23.0%, SE 5.3, t=4.4 -- 95% CI roughly [12.6%, 33.4%]
-#
-# The aggregate effect is real; three individual models are single-sample-
-# per-instance measurements against a model whose unsteered output varies by a
-# median 33% run to run (measured directly by re-running the L0 arm), so 12
-# pairs cannot resolve an effect of that size. The band below sits inside the
-# pooled CI, which is the claim that is actually supported. Do not quote a
-# single-model figure from this table as established.
-#
-# These supersede an earlier 5-task toy benchmark that put L3 at (0.336,
-# 0.738). That figure was wrong twice over: it rested on five synthetic prompts
-# rather than real repository context, and it measured a version of the L3
-# string that has since changed twice. It over-reported by roughly 2x at the
-# optimistic end, which is the direction that matters -- the dashboard was
-# flattering itself.
-#
-# L2 and L4 are still from that toy benchmark and are therefore NOT comparable
-# to L3's numbers; they are retained only because a stale estimate at a level
-# nobody defaults to beats no estimate at all. Re-measure before trusting them.
-#
-#     level   claude-sonnet-5   gpt-5.2      (toy benchmark, 2026-08-31)
-#     L2               22.6%      10.0%
-#     L4               73.8%      42.6%
-#
-# The value below is the LOWER of the two families/providers, deliberately: a
-# savings number that flatters is worse than one that under-reports, and the
-# spread is the honest width of what we know. L1 is absent because it was never
-# measured -- an absent level yields no estimate rather than an invented one.
-#
-# This is the weakest of the tiers and is labelled ``modelled`` to say so: it
-# is not this deployment's traffic. Any real holdout or learned baseline
-# supersedes it automatically in :meth:`SavingsLedger.best_estimate`.
-MODELLED_REDUCTION: dict[int, tuple[float, float]] = {
-    # level: (conservative, optimistic)
-    2: (0.100, 0.226),   # toy benchmark -- stale, see above
-    3: (0.182, 0.312),   # SWE-bench Verified, 61 paired samples, 6 models
-    4: (0.426, 0.738),   # toy benchmark -- stale, see above
-}
+# An empty table means :meth:`estimate_from_model` returns ``None`` for every
+# level, so the dashboard shows a dash rather than a number nobody measured.
+# A dash is the correct rendering of "not measured"; an invented constant is
+# not, and would be the one failure mode this module exists to prevent.
+MODELLED_REDUCTION: dict[int, tuple[float, float]] = {}
+
+
+def register_modelled_factors(level: int, conservative: float, optimistic: float) -> None:
+    """Install benchmark-derived reduction factors for one verbosity level.
+
+    Extension seam. ``conservative`` and ``optimistic`` are fractions in
+    ``(0, 1)`` -- the low and high ends of the measured reduction, where the
+    low end becomes the headline so the number under-reports rather than
+    flatters.
+
+    Registering a level twice replaces it, so an extension may refresh factors
+    after a re-measurement. Values outside ``(0, 1)`` are rejected: the
+    estimator inverts them as ``r/(1-r)``, which is nonsense at 0 and divides
+    by zero at 1.
+    """
+    if not 0.0 < conservative < 1.0 or not 0.0 < optimistic < 1.0:
+        raise ValueError(
+            f"reduction factors must lie in (0, 1); got ({conservative}, {optimistic})"
+        )
+    if conservative > optimistic:
+        raise ValueError(f"conservative factor {conservative} exceeds optimistic {optimistic}")
+    MODELLED_REDUCTION[level] = (conservative, optimistic)
 
 
 @dataclass
@@ -387,9 +365,9 @@ class SavingsLedger:
         The arithmetic is the part worth getting right. Observed output is
         already POST-shaping, so the saving is not ``observed x r``. If the
         unshaped response would have been ``U`` and we observed
-        ``O = U(1-r)``, then ``saved = U - O = O * r/(1-r)``. At r=0.182 that
-        is 0.222 of observed, not 0.182 -- understating by a fifth if done the
-        naive way.
+        ``O = U(1-r)``, then ``saved = U - O = O * r/(1-r)``. At r=0.20 that is
+        0.25 of observed, not 0.20 -- the naive form understates, and by more
+        as r grows.
         """
         factors = MODELLED_REDUCTION.get(level)
         if factors is None:

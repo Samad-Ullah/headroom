@@ -580,11 +580,30 @@ class TestFlushDurability:
 class TestModelledTier:
     """The fallback for a deployment with no counterfactual of its own.
 
-    Every fresh install is in this state: `learn --verbosity` builds its
-    baseline from session history that predates the shaper, and a new install
-    has none, so without this tier the dashboard reads "—" forever while real
-    tokens are being saved.
+    The factor table ships EMPTY: open-source Headroom applies steering but
+    does not claim a savings figure it has not measured. Factors arrive either
+    from a holdout (which outranks this tier entirely) or from an extension
+    calling ``register_modelled_factors``. These tests therefore register their
+    own factors and restore the table afterwards -- they exercise the
+    arithmetic, which is permanent, not the numbers, which are not.
     """
+
+    @staticmethod
+    @pytest.fixture
+    def factors():
+        """Install factors for level 3, then restore the real table."""
+        from headroom.proxy.output_savings import (
+            MODELLED_REDUCTION,
+            register_modelled_factors,
+        )
+
+        saved = dict(MODELLED_REDUCTION)
+        register_modelled_factors(3, 0.20, 0.40)
+        try:
+            yield (0.20, 0.40)
+        finally:
+            MODELLED_REDUCTION.clear()
+            MODELLED_REDUCTION.update(saved)
 
     @staticmethod
     def _ledger_with(observed_total: int, n: int):
@@ -598,7 +617,34 @@ class TestModelledTier:
             ledger.record("treatment", key, observed_total // n)
         return ledger
 
-    def test_saving_inverts_the_reduction_rather_than_scaling_by_it(self):
+    def test_ships_empty_so_an_unmeasured_deployment_claims_nothing(self):
+        """No factors by default -> no modelled estimate, at any level.
+
+        The dash this produces is the point: it is the correct rendering of
+        "not measured". A built-in constant would be a number nobody measured
+        on this deployment's traffic, which is the failure mode the tiering
+        exists to prevent.
+        """
+        from headroom.proxy.output_savings import MODELLED_REDUCTION
+
+        assert MODELLED_REDUCTION == {}
+        led = self._ledger_with(5_000, 5)
+        assert all(led.estimate_from_model(lv) is None for lv in (1, 2, 3, 4))
+
+    def test_registering_factors_enables_the_tier(self, factors):
+        assert self._ledger_with(5_000, 5).estimate_from_model(3) is not None
+
+    def test_nonsense_factors_are_rejected_at_registration(self):
+        """r=0 and r=1 break the r/(1-r) inversion; catch it at the door."""
+        from headroom.proxy.output_savings import register_modelled_factors
+
+        for bad in ((0.0, 0.4), (1.0, 1.0), (-0.1, 0.4), (0.5, 1.2)):
+            with pytest.raises(ValueError):
+                register_modelled_factors(3, *bad)
+        with pytest.raises(ValueError, match="exceeds optimistic"):
+            register_modelled_factors(3, 0.5, 0.2)
+
+    def test_saving_inverts_the_reduction_rather_than_scaling_by_it(self, factors):
         """Observed output is POST-shaping, so saved is observed*r/(1-r).
 
         The naive observed*r understates the saving. This is the single
@@ -621,11 +667,11 @@ class TestModelledTier:
         # baseline = what the unshaped run would have emitted
         assert est.baseline_tokens == pytest.approx(10_000 + est.tokens_saved, rel=1e-6)
 
-    def test_kind_is_modelled_so_the_ui_can_refuse_to_call_it_a_ci(self):
+    def test_kind_is_modelled_so_the_ui_can_refuse_to_call_it_a_ci(self, factors):
         est = self._ledger_with(5_000, 5).estimate_from_model(3)
         assert est is not None and est.kind == "modelled"
 
-    def test_band_is_the_two_provider_spread(self):
+    def test_band_is_the_two_provider_spread(self, factors):
         from headroom.proxy.output_savings import MODELLED_REDUCTION
 
         low, high = MODELLED_REDUCTION[3]
