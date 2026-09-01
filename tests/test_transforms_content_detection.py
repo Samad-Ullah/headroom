@@ -227,7 +227,14 @@ def test_log_detection_prefers_build_output_patterns() -> None:
     result = _try_detect_log(log_output)
     assert result is not None
     assert result.content_type is ContentType.BUILD_OUTPUT
-    assert result.metadata == {"pattern_matches": 5, "error_matches": 2, "total_lines": 6}
+    # ``test_matches`` added alongside the test-runner detection table; this blob
+    # contains no runner status lines, so it stays 0 and the other counts are unchanged.
+    assert result.metadata == {
+        "pattern_matches": 5,
+        "error_matches": 2,
+        "test_matches": 0,
+        "total_lines": 6,
+    }
     assert result.confidence == 0.8166666666666667
     assert detect_content_type(log_output).content_type is ContentType.BUILD_OUTPUT
 

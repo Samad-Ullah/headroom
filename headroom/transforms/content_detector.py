@@ -159,6 +159,67 @@ _LOG_PATTERNS = [
     re.compile(r"^\s*\.\.\. \d+ more$"),  # Java elided-frames summary
 ]
 
+# Test-runner status lines. Kept separate from ``_LOG_PATTERNS`` because they are a
+# far stronger signal than a generic ERROR/WARN keyword: a line matching one of these
+# is almost certainly machine-generated test output, so a lower density is enough to
+# classify the blob (see ``_try_detect_log``).
+#
+# Why this table exists: ``_LOG_PATTERNS`` anchors test status to the START of a line
+# (``^\s*PASSED``), but no mainstream runner emits it there — pytest writes
+# ``tests/t.py::test_x PASSED  [ 42%]``, go writes ``--- PASS: TestFoo``, cargo writes
+# ``test tests::foo ... ok``. The anchored pattern therefore matched none of them, and
+# a 400-line pytest log scored a 0.005 density against a 0.10 threshold, so it fell
+# through to PLAIN_TEXT and never reached LogCompressor.
+#
+# Status tokens are matched CASE-SENSITIVELY: runners emit uppercase, English prose
+# ("the test passed") does not, which keeps ordinary text out of this table.
+_TEST_RUNNER_PATTERNS = [
+    # pytest/unittest: status at end of line, optional progress column.
+    re.compile(r"\b(PASSED|FAILED|SKIPPED|XFAIL|XPASS)\b(?:\s+\[\s*\d+%\])?\s*$"),
+    # A test-file-ish token followed by an uppercase status, anywhere in the line.
+    re.compile(r"(?:::|_test|test_|\.py|\.go|\.rs|\.ts|\.js)\S*\s+\b(PASSED|FAILED|SKIPPED|ERROR)\b"),
+    # go test: "--- PASS: TestFoo (0.00s)"
+    re.compile(r"^\s*--- (PASS|FAIL|SKIP): \S+"),
+    # go test package summary: "ok  github.com/x/y  0.012s"
+    re.compile(r"^(ok|FAIL)\s+\S+(\s+[\d.]+m?s)?\s*$"),
+    # jest/mocha/vitest tick-cross result lines.
+    re.compile(r"^\s*[\u2713\u2714\u00d7\u2717\u221a]\s+\S"),
+    # cargo: "test tests::foo ... ok" and "test result: FAILED. 12 passed; 1 failed"
+    re.compile(r"^test \S+ \.\.\. (ok|FAILED|ignored)\b"),
+    re.compile(r"^test result: (ok|FAILED)\."),
+    # Final tallies. Deliberately NOT a bare "<n> passed": English prose says
+    # "3 passed on the first try", which would reclassify a document as build
+    # output. A real tally is corroborated by a duration ("in 3.21s"), a second
+    # count ("1 failed, 400 passed"), or mocha's line-leading form.
+    re.compile(r"\b\d+ (passed|failed|skipped|errors?)\b[^\n]*\bin \d+\.?\d*\s*m?s\b"),
+    re.compile(r"\b\d+ (passed|failed|skipped)\b[,;]\s*\d+ (passed|failed|skipped)\b"),
+    re.compile(r"^\s*\d+ (passing|failing)\b"),
+    # JUnit / maven-surefire.
+    re.compile(r"^Tests run: \d+, Failures: \d+"),
+]
+
+# Head+tail sample used for log detection.
+#
+# The old code read ``content.split("\n")[:200]``. Test and build logs are
+# back-loaded: the first hundreds of lines are uniform PASS noise and the
+# diagnostic payload (failures, tracebacks, the summary tally) sits at the END.
+# A head-only window judges the blob on precisely the part that carries no signal.
+_LOG_HEAD_LINES = 150
+_LOG_TAIL_LINES = 100
+
+
+def _sample_log_lines(content: str) -> list[str]:
+    """Return head + tail lines of ``content`` for density scoring.
+
+    Short inputs are returned whole. Longer ones contribute their first
+    ``_LOG_HEAD_LINES`` and last ``_LOG_TAIL_LINES`` lines with no overlap, so the
+    summary/traceback tail is always scored.
+    """
+    lines = content.split("\n")
+    if len(lines) <= _LOG_HEAD_LINES + _LOG_TAIL_LINES:
+        return lines
+    return lines[:_LOG_HEAD_LINES] + lines[-_LOG_TAIL_LINES:]
+
 
 def detect_content_type(content: str) -> DetectionResult:
     """Detect the type of content for appropriate compression.
@@ -515,15 +576,32 @@ def _try_detect_search(content: str) -> DetectionResult | None:
 
 
 def _try_detect_log(content: str) -> DetectionResult | None:
-    """Try to detect build/log output."""
-    lines = content.split("\n")[:200]  # Check first 200 lines
+    """Try to detect build/log output.
+
+    Scores two independent signals over a head+tail sample:
+
+    * ``_LOG_PATTERNS``  — generic log furniture (ERROR/WARN, timestamps, tracebacks).
+      Needs >= 10% line density, unchanged from the original heuristic.
+    * ``_TEST_RUNNER_PATTERNS`` — test-runner status lines. A much stronger signal, so
+      a 5% density (with an absolute floor of 3 matching lines) is enough on its own.
+
+    The absolute floor keeps a single stray "3 passed" sentence in prose from
+    reclassifying a document as build output.
+    """
+    lines = _sample_log_lines(content)
     if not lines:
         return None
 
     pattern_matches = 0
     error_matches = 0
+    test_matches = 0
 
     for line in lines:
+        for pattern in _TEST_RUNNER_PATTERNS:
+            if pattern.search(line):
+                test_matches += 1
+                break
+
         for i, pattern in enumerate(_LOG_PATTERNS):
             if pattern.search(line):
                 pattern_matches += 1
@@ -531,7 +609,7 @@ def _try_detect_log(content: str) -> DetectionResult | None:
                     error_matches += 1
                 break  # One pattern per line is enough
 
-    if pattern_matches == 0:
+    if pattern_matches == 0 and test_matches == 0:
         return None
 
     non_empty_lines = sum(1 for line in lines if line.strip())
@@ -539,12 +617,16 @@ def _try_detect_log(content: str) -> DetectionResult | None:
         return None
 
     ratio = pattern_matches / non_empty_lines
+    test_ratio = test_matches / non_empty_lines
 
-    # Need at least 10% of lines to match log patterns
-    if ratio < 0.1:
+    strong_test_signal = test_matches >= 3 and test_ratio >= 0.05
+    if not strong_test_signal and ratio < 0.1:
         return None
 
-    confidence = min(1.0, 0.3 + (ratio * 0.5) + (error_matches * 0.05))
+    confidence = min(
+        1.0,
+        0.3 + (ratio * 0.5) + (test_ratio * 0.6) + (error_matches * 0.05),
+    )
 
     return DetectionResult(
         ContentType.BUILD_OUTPUT,
@@ -552,6 +634,7 @@ def _try_detect_log(content: str) -> DetectionResult | None:
         {
             "pattern_matches": pattern_matches,
             "error_matches": error_matches,
+            "test_matches": test_matches,
             "total_lines": non_empty_lines,
         },
     )
