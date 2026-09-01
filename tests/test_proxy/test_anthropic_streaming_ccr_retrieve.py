@@ -129,7 +129,7 @@ def test_event_level_ccr_keeps_upstream_streaming_and_wires_interceptor() -> Non
                     "max_tokens": 64,
                     "stream": True,
                     "tools": [create_ccr_tool_definition("anthropic")],
-                    "messages": [{"role": "user", "content": "use retrieval"}],
+                    "messages": [{"role": "user", "content": _buffered("use retrieval")}],
                 },
             )
 
