@@ -425,7 +425,7 @@ def sample_request_metrics():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_copilot_cli_home(monkeypatch, tmp_path_factory):
+def _isolate_copilot_cli_home(monkeypatch, tmp_path):
     """Keep the developer's real ``~/.copilot`` out of every test.
 
     ``headroom wrap copilot`` now reads the Copilot CLI's ``settings.json`` for a
@@ -434,4 +434,4 @@ def _isolate_copilot_cli_home(monkeypatch, tmp_path_factory):
     another port) would otherwise fail unrelated wrap tests on their machine.
     Tests that exercise the check set ``COPILOT_HOME`` themselves.
     """
-    monkeypatch.setenv("COPILOT_HOME", str(tmp_path_factory.mktemp("copilot-home")))
+    monkeypatch.setenv("COPILOT_HOME", str(tmp_path / "copilot-home"))

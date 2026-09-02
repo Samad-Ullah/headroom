@@ -28,29 +28,42 @@ def ensure_loopback_no_proxy(env: dict[str, str]) -> dict[str, str]:
     """Exempt the loopback proxy hop from any HTTP(S) proxy configuration.
 
     Idempotent: hosts already listed are not duplicated. ``NO_PROXY`` is always
-    written (Node's fetch and reqwest both read it); a pre-existing lowercase
-    ``no_proxy`` is kept in sync so the two never disagree. Mutates and returns
-    ``env`` for call-site convenience.
+    written; a pre-existing lowercase ``no_proxy`` is kept in sync. Readers
+    disagree on which spelling wins (undici prefers lowercase, reqwest and Go
+    prefer uppercase), so both are seeded from the union of the two — writing a
+    fresh ``NO_PROXY`` that lacked the entries of an existing ``no_proxy`` would
+    silently drop the corporate exemptions for anything the CLI spawns. Mutates
+    and returns ``env`` for call-site convenience.
     """
+    entries: list[str] = []
     for variable in ("NO_PROXY", "no_proxy"):
-        current = env.get(variable)
-        if current is None and variable == "no_proxy":
-            continue
-        entries = [entry.strip() for entry in (current or "").split(",") if entry.strip()]
-        for host in LOOPBACK_NO_PROXY_HOSTS:
-            if host not in entries:
-                entries.append(host)
-        env[variable] = ",".join(entries)
+        for entry in (env.get(variable) or "").split(","):
+            entry = entry.strip()
+            if entry and entry not in entries:
+                entries.append(entry)
+    for host in LOOPBACK_NO_PROXY_HOSTS:
+        if host not in entries:
+            entries.append(host)
+    merged = ",".join(entries)
+    env["NO_PROXY"] = merged
+    if "no_proxy" in env:
+        env["no_proxy"] = merged
     return env
 
 
-def copilot_home(environ: Mapping[str, str] | None = None) -> Path:
-    """Return the Copilot CLI config directory (``$COPILOT_HOME`` or ``~/.copilot``)."""
+def copilot_home(environ: Mapping[str, str] | None = None, *, windows: bool | None = None) -> Path:
+    """Return the Copilot CLI config directory (``$COPILOT_HOME`` or ``~/.copilot``).
+
+    Matches Node's ``os.homedir()``, which the CLI uses: ``USERPROFILE`` on
+    Windows (``HOME`` is ignored there, even when Git-for-Windows sets it),
+    ``HOME`` elsewhere. ``windows`` defaults to the running platform.
+    """
     env = environ if environ is not None else os.environ
     configured = (env.get("COPILOT_HOME") or "").strip()
     if configured:
         return Path(configured).expanduser()
-    home = env.get("HOME") or env.get("USERPROFILE")
+    on_windows = os.name == "nt" if windows is None else windows
+    home = env.get("USERPROFILE") if on_windows else env.get("HOME")
     return (Path(home) if home else Path.home()) / ".copilot"
 
 
@@ -126,8 +139,8 @@ def check_copilot_url_setting(base_url: str, *, environ: Mapping[str, str] | Non
         )
         raise click.ClickException(
             f"{described}. The Copilot CLI prefers that setting over COPILOT_API_URL, so this "
-            f"launch would bypass Headroom. Remove the key, or set it to {base_url!r} to route "
-            "through this proxy."
+            f"launch would bypass Headroom. Remove the key, or set it to {proxy_origin!r} to "
+            "route every project through this proxy."
         )
     for path, value in same_origin_other_path:
         click.echo(
@@ -357,12 +370,21 @@ def _copilot_bundle_candidates(copilot_bin: str | None) -> list[str]:
 
 
 def _bundle_mentions_native_api_url(path: str) -> bool | None:
-    """Return True/False for a readable bundle, None when it cannot be read."""
+    """Return True/False for a readable bundle, None when it cannot be read.
+
+    Reads in chunks, carrying the tail of each chunk into the next so a match
+    that straddles a chunk boundary is not missed — a miss here now refuses the
+    launch rather than merely leaving the verdict unknown.
+    """
+    needle = COPILOT_NATIVE_API_URL_ENV
+    carry = ""
     try:
         with open(path, encoding="utf-8", errors="replace") as bundle:
             while chunk := bundle.read(1 << 20):
-                if COPILOT_NATIVE_API_URL_ENV in chunk:
+                window = carry + chunk
+                if needle in window:
                     return True
+                carry = window[-(len(needle) - 1) :]
     except OSError:
         return None
     return False
@@ -376,20 +398,26 @@ def native_api_url_supported(
     Returns True when a bundle references ``COPILOT_API_URL``, False when at
     least one bundle was read and none did, and None when no bundle could be
     located — the caller then proceeds but cannot promise the redirect took.
-    ``copilot_bin`` (the binary about to be launched) is checked first so the
-    verdict describes that build rather than a stale installer copy.
+    ``copilot_bin`` (the binary about to be launched) decides on its own when its
+    bundle can be read: a stale installer copy under the legacy ``pkg`` roots
+    must not vouch for a build that dropped the hook. Those roots are consulted
+    only when no readable bundle sits beside the launched binary.
     """
     env = environ if environ is not None else os.environ
-    local = env.get("LOCALAPPDATA") or env.get("HOME") or os.path.expanduser("~")
+    home = env.get("HOME") or os.path.expanduser("~")
+    local = env.get("LOCALAPPDATA") or home
     roots = (
         os.path.join(local, "copilot", "pkg"),
-        os.path.join(os.path.expanduser("~"), ".local", "share", "copilot", "pkg"),
+        os.path.join(home, ".local", "share", "copilot", "pkg"),
     )
+    launched_verdicts = [
+        _bundle_mentions_native_api_url(path) for path in _copilot_bundle_candidates(copilot_bin)
+    ]
+    if True in launched_verdicts:
+        return True
+    if False in launched_verdicts:
+        return False
     found_bundle = False
-    for path in _copilot_bundle_candidates(copilot_bin):
-        found_bundle = True
-        if _bundle_mentions_native_api_url(path):
-            return True
     for root in roots:
         if not os.path.isdir(root):
             continue
@@ -412,6 +440,11 @@ def build_launch_env(
 ) -> tuple[dict[str, str], list[str]]:
     """Build the Copilot BYOK environment for the selected provider type.
 
+    A durable ``headroom install`` exports ``COPILOT_API_URL`` into the shell so
+    the native lane works everywhere; this lane routes chat through the BYOK
+    variables instead and drops that hook, so the CLI's ancillary CAPI calls
+    are not sent to a proxy that may not be running.
+
     ``project`` (the wrap launch directory) is encoded as a ``/p/<name>``
     base-URL prefix because the Copilot CLI cannot send custom headers; the
     proxy strips it and attributes savings per project.
@@ -421,6 +454,7 @@ def build_launch_env(
     # charge of which keys to seed). The previous `environ or os.environ`
     # collapsed those two cases because `bool({}) is False`.
     env = dict(environ if environ is not None else os.environ)
+    env.pop(COPILOT_NATIVE_API_URL_ENV, None)
     env["COPILOT_PROVIDER_TYPE"] = provider_type
     env.pop("COPILOT_PROVIDER_WIRE_API", None)
     ensure_loopback_no_proxy(env)

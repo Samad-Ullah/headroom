@@ -151,11 +151,49 @@ def _proxy(openai_target: str):
     return type("Proxy", (), {"OPENAI_API_URL": openai_target, "provider_runtime": Runtime()})()
 
 
-@pytest.mark.parametrize("token", ["tid_session", "gho_oauth", "ghu_user"])
+#: The bearer GitHub actually mints: a semicolon claim string, not a prefix.
+REAL_COPILOT_API_TOKEN = "tid=0123456789abcdef0123456789abcdef;exp=1893456000;sku=copilot_for_business_seat;st=dotcom:9f8e7d6c"
+
+
+@pytest.mark.parametrize("token", [REAL_COPILOT_API_TOKEN, "tid_session", "gho_oauth"])
 def test_copilot_bearer_redirects_away_from_stock_hosts(token: str) -> None:
     headers = {"Authorization": f"Bearer {token}"}
     assert copilot_bearer_upstream(headers, "https://api.openai.com") == COPILOT_API
     assert copilot_bearer_upstream(headers, "https://api.anthropic.com") == COPILOT_API
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "ghu_user_to_server",
+        "ghp_personal",
+        "github_pat_11A",
+        "ghs_installation",
+        "tid=notahex;exp=1",
+    ],
+)
+def test_copilot_bearer_redirect_ignores_tokens_that_do_not_name_copilot(token: str) -> None:
+    """Every routed token must also be forwardable, or the redirect would make
+    ``apply_copilot_api_auth`` swap in the operator's own seat for any caller."""
+    assert (
+        copilot_bearer_upstream({"authorization": f"Bearer {token}"}, "https://api.openai.com")
+        is None
+    )
+
+
+@pytest.mark.parametrize("token", [REAL_COPILOT_API_TOKEN, "tid_session", "gho_oauth"])
+def test_every_routed_token_is_also_forwarded_unchanged(token: str) -> None:
+    assert copilot_auth._is_copilot_routing_bearer(token) is True
+    assert copilot_auth._is_forwardable_copilot_bearer_token(token) is True
+
+
+def test_stock_host_is_recognised_with_a_port_and_path() -> None:
+    assert (
+        copilot_bearer_upstream(
+            {"authorization": f"Bearer {REAL_COPILOT_API_TOKEN}"}, "https://api.openai.com:443/v1"
+        )
+        == COPILOT_API
+    )
 
 
 @pytest.mark.parametrize(
@@ -295,7 +333,9 @@ def _messages_app(anthropic_target: str):
 
         @staticmethod
         def model_metadata_provider(headers) -> str:  # type: ignore[no-untyped-def]
-            return "anthropic"
+            # Mirrors the runtime: only an Anthropic-style key marks the caller
+            # as Anthropic; a bare bearer (Copilot's included) reads as OpenAI.
+            return "anthropic" if headers.get("x-api-key") else "openai"
 
     class Proxy:
         ANTHROPIC_API_URL = anthropic_target
@@ -308,12 +348,19 @@ def _messages_app(anthropic_target: str):
             self.config = SimpleNamespace(bedrock_api_url=None)
             self.provider_runtime = Runtime()
             self.upstreams: list[str | None] = []
+            self.redirect_flags: list[bool] = []
+            self.passthrough_targets: list[tuple[str, str]] = []
+            self.http_client = object()
 
-        async def handle_anthropic_messages(self, request, upstream_base_url=None):  # type: ignore[no-untyped-def]
+        async def handle_anthropic_messages(  # type: ignore[no-untyped-def]
+            self, request, upstream_base_url=None, copilot_redirect=False
+        ):
             self.upstreams.append(upstream_base_url)
+            self.redirect_flags.append(copilot_redirect)
             return JSONResponse({"ok": True})
 
         async def handle_passthrough(self, request, base_url, endpoint_name="", provider=""):  # type: ignore[no-untyped-def]
+            self.passthrough_targets.append((request.url.path, base_url))
             return JSONResponse({"ok": True})
 
     app = FastAPI()
@@ -331,6 +378,7 @@ def test_messages_route_redirects_a_copilot_bearer_to_copilot() -> None:
     )
     assert response.status_code == 200
     assert proxy.upstreams == [COPILOT_API]
+    assert proxy.redirect_flags == [True], "the handler must know the proxy chose this host"
 
 
 def test_messages_route_leaves_anthropic_keys_on_the_default_path() -> None:
@@ -346,6 +394,7 @@ def test_messages_route_leaves_anthropic_keys_on_the_default_path() -> None:
         headers={"Authorization": "Bearer sk-ant-oat-abc"},
     )
     assert proxy.upstreams == [None, None]
+    assert proxy.redirect_flags == [False, False]
 
 
 def test_messages_route_keeps_a_copilot_bearer_on_a_pinned_target() -> None:
@@ -356,3 +405,36 @@ def test_messages_route_keeps_a_copilot_bearer_on_a_pinned_target() -> None:
         headers={"Authorization": "Bearer tid_session"},
     )
     assert proxy.upstreams == [None]
+
+
+@pytest.mark.parametrize("path", AUTO_RESOLUTION_PATHS)
+def test_auto_resolution_calls_reach_copilot_through_the_catch_all_route(path: str) -> None:
+    """A bare ``@app.post`` for one of these paths that skipped the passthrough
+    selector would not show up in ``OPENAI_HANDLER_ROUTES``; drive the router."""
+    client, proxy = _messages_app("https://api.anthropic.com")
+    response = client.post(
+        path,
+        json={"auto_mode": {"model_hints": ["auto"]}},
+        headers={"Authorization": f"Bearer {REAL_COPILOT_API_TOKEN}"},
+    )
+    assert response.status_code == 200
+    assert proxy.passthrough_targets == [(path, COPILOT_API)]
+
+
+def test_prefixed_models_route_follows_the_same_rule(monkeypatch: pytest.MonkeyPatch) -> None:
+    from headroom.providers import proxy_routes
+
+    seen: list[str] = []
+
+    async def fake_metadata(proxy, request, *, endpoint, provider_api_base_url, provider_name):  # type: ignore[no-untyped-def]
+        from fastapi.responses import JSONResponse
+
+        seen.append(provider_api_base_url)
+        return JSONResponse({"data": []})
+
+    monkeypatch.setattr(proxy_routes, "handle_model_metadata_endpoint", fake_metadata)
+    client, _proxy = _messages_app("https://api.anthropic.com")
+    client.get("/v1/models", headers={"Authorization": f"Bearer {REAL_COPILOT_API_TOKEN}"})
+    client.get("/v1/models/gpt-5.5", headers={"Authorization": f"Bearer {REAL_COPILOT_API_TOKEN}"})
+    client.get("/v1/models", headers={"Authorization": "Bearer sk-openai"})
+    assert seen == [COPILOT_API, COPILOT_API, "https://api.openai.com"]

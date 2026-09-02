@@ -403,6 +403,21 @@ def _resolve_openai_upstream_base(request_headers: dict[str, str]) -> str | None
     return normalized
 
 
+def _copilot_redirect_base_url(
+    request_headers: Any, custom_base_url: str | None, configured_target: str
+) -> str | None:
+    """Return the Copilot base a request is redirected to, or None.
+
+    Single source of the rule shared by :meth:`OpenAIHandlerMixin._resolve_openai_upstream`
+    and the chat / responses handlers: an explicit ``x-headroom-base-url`` always
+    wins, otherwise a Copilot credential headed for the stock OpenAI host is sent
+    to Copilot (see :func:`copilot_bearer_upstream`).
+    """
+    if custom_base_url:
+        return None
+    return copilot_bearer_upstream(request_headers, configured_target)
+
+
 def _extra_headers_unless_redirected(
     extra: dict[str, str] | None, *, redirected_to: str | None
 ) -> dict[str, str] | None:
@@ -1929,9 +1944,10 @@ class OpenAIHandlerMixin:
         not just the generic passthrough route that already honors it. Falls
         back to the configured ``OPENAI_API_URL`` (``OPENAI_TARGET_API_URL``).
         """
+        custom_base_url = _resolve_openai_upstream_base(request.headers)
         return (
-            _resolve_openai_upstream_base(request.headers)
-            or copilot_bearer_upstream(request.headers, self.OPENAI_API_URL)
+            custom_base_url
+            or _copilot_redirect_base_url(request.headers, custom_base_url, self.OPENAI_API_URL)
             or self.OPENAI_API_URL
         )
 
@@ -3341,14 +3357,10 @@ class OpenAIHandlerMixin:
         # Copilot (see `copilot_bearer_upstream`). Track the redirect separately
         # from the operator-configured target: it decides both the destination
         # and whether the operator's gateway headers may travel with the request.
-        copilot_redirect_base_url = (
-            None
-            if custom_upstream_base_url
-            else copilot_bearer_upstream(request.headers, self.OPENAI_API_URL)
+        copilot_redirect_base_url = _copilot_redirect_base_url(
+            request.headers, custom_upstream_base_url, self.OPENAI_API_URL
         )
-        upstream_base_url = (
-            custom_upstream_base_url or copilot_redirect_base_url or self.OPENAI_API_URL
-        )
+        upstream_base_url = self._resolve_openai_upstream(request)
         handler_path_suffix = _resolve_openai_chat_handler_path(
             upstream_base_url,
             model,
@@ -5565,10 +5577,8 @@ class OpenAIHandlerMixin:
         # credential headed for the stock OpenAI host is redirected to Copilot,
         # and the operator's gateway headers must not follow it there.
         custom_responses_base_url = _resolve_openai_upstream_base(request.headers)
-        copilot_redirect_base_url = (
-            None
-            if custom_responses_base_url
-            else copilot_bearer_upstream(request.headers, self.OPENAI_API_URL)
+        copilot_redirect_base_url = _copilot_redirect_base_url(
+            request.headers, custom_responses_base_url, self.OPENAI_API_URL
         )
         headers = merge_extra_headers(
             headers,

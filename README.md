@@ -279,8 +279,9 @@ export GITHUB_COPILOT_ENTERPRISE_URL=https://ghe.example.com
 
 Business and Enterprise accounts are advertised a per-plan host
 (`api.business.githubcopilot.com` / `api.enterprise.githubcopilot.com`). Headroom
-routes them through the generic host by default and prints the advertised host
-at launch. If your network uses GitHub's subscription-based network routing,
+routes them through the generic host by default; `--subscription`, `--native`
+and `wrap vscode` print the advertised host at launch when they override it. If
+your network uses GitHub's subscription-based network routing,
 which blocks the generic host, set `GITHUB_COPILOT_USE_ADVERTISED_HOST=1` or pin
 `GITHUB_COPILOT_API_URL` to the advertised host. Data-residency hosts
 (`copilot-api.<tenant>.ghe.com`) are always honored.

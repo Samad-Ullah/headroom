@@ -886,8 +886,17 @@ class AnthropicHandlerMixin:
         provider_name: str = "anthropic",
         model_override: str | None = None,
         force_stream: bool = False,
+        copilot_redirect: bool = False,
     ) -> Response | StreamingResponse:
-        """Handle Anthropic /v1/messages endpoint."""
+        """Handle Anthropic /v1/messages endpoint.
+
+        ``copilot_redirect`` marks an ``upstream_base_url`` the proxy chose itself
+        because the caller presented a Copilot credential against the stock
+        Anthropic target (see ``copilot_bearer_upstream``). The operator's
+        ``anthropic_extra_headers`` are secrets for the configured target and
+        are withheld from such a request, without the trust check that a
+        client-supplied override goes through.
+        """
         if not hasattr(self, "pipeline_extensions"):
             from headroom.pipeline import PipelineExtensionManager
 
@@ -1209,10 +1218,11 @@ class AnthropicHandlerMixin:
             headers = _strip_internal_headers(headers)
             # `upstream_base_url` is the per-request `x-headroom-base-url`
             # override when the client sent one. These headers are secrets, so
-            # they only travel to a host the operator designated.
+            # they only travel to a host the operator designated — and never
+            # with a request the proxy redirected to Copilot on its own.
             headers = merge_extra_headers(
                 headers,
-                self.config.anthropic_extra_headers,
+                None if copilot_redirect else self.config.anthropic_extra_headers,
                 upstream_url=upstream_base_url,
                 config=self.config,
             )

@@ -1575,7 +1575,8 @@ def _is_forwardable_copilot_bearer_token(token: str) -> bool:
     """Return True when a bearer token should be forwarded as-is for Copilot inference.
 
     Unlike _is_copilot_api_token() (used only for subscription/user-info
-    resolution), this accepts both short-lived Copilot API tokens (`tid_`)
+    resolution), this accepts both short-lived Copilot API tokens (the
+    ``tid=<hex>;exp=…`` claim string GitHub mints, or the ``tid_`` prefix form)
     AND GitHub OAuth tokens (`gho_`, `ghs_`, `ghp_`, `github_pat_`) as valid,
     forwardable Copilot bearer credentials for chat-completion/inference
     requests.
@@ -1601,7 +1602,26 @@ def _is_forwardable_copilot_bearer_token(token: str) -> bool:
     if not normalized:
         return False
 
-    return normalized.startswith(("tid_", "gho_", "ghs_", "ghp_", "github_pat_"))
+    return _is_copilot_api_token_shape(normalized) or normalized.startswith(
+        ("gho_", "ghs_", "ghp_", "github_pat_")
+    )
+
+
+def _is_copilot_api_token_shape(token: str) -> bool:
+    """Return True for the wire shape of a Copilot API token.
+
+    The token GitHub mints at ``/copilot_internal/v2/token`` is a
+    semicolon-separated claim string, ``tid=<hex>;exp=<unix>;sku=...:<sig>``;
+    the CLI and VS Code send it verbatim as the bearer. The ``tid_`` prefix form
+    is kept for callers and fixtures that already use it.
+    """
+    normalized = token.strip()
+    if normalized.startswith("tid_"):
+        return True
+    if not normalized.startswith("tid="):
+        return False
+    claim, sep, _rest = normalized[4:].partition(";")
+    return bool(sep) and bool(claim) and all(c in "0123456789abcdefABCDEF" for c in claim)
 
 
 def _token_kind(token: str) -> str:
@@ -1613,13 +1633,20 @@ def _token_kind(token: str) -> str:
     return "unknown" if t else "empty"
 
 
-#: Bearer prefixes that identify a Copilot client's own credential on the wire:
-#: the short-lived Copilot API token (``tid_``) and the GitHub OAuth tokens the
-#: Copilot apps mint (``gho_``/``ghu_``). Narrower than
-#: :func:`_is_forwardable_copilot_bearer_token` on purpose — personal access
-#: tokens are also valid GitHub credentials for other products (GitHub Models),
-#: so they must not be taken as proof that a request was meant for Copilot.
-_COPILOT_ROUTING_BEARER_PREFIXES: tuple[str, ...] = ("tid_", "gho_", "ghu_")
+def _is_copilot_routing_bearer(token: str) -> bool:
+    """Return True for a bearer whose presence means "this client is a Copilot client".
+
+    Deliberately narrower than :func:`_is_forwardable_copilot_bearer_token` and a
+    strict subset of it: a Copilot API token (``tid=…``) or the ``gho_`` OAuth
+    token the CLI and VS Code hold. Every token accepted here must also be
+    forwardable, otherwise redirecting it to Copilot would make
+    :func:`apply_copilot_api_auth` substitute the operator's own credential for an
+    arbitrary caller's — the redirect must never widen who can spend the
+    operator's seat. ``ghp_``/``github_pat_``/``ghs_`` are forwardable but say
+    nothing about which provider the caller meant, so they do not route.
+    """
+    return _is_copilot_api_token_shape(token) or token.startswith("gho_")
+
 
 #: Stock provider hosts a Copilot credential can never authenticate against.
 _STOCK_PROVIDER_HOSTS: frozenset[str] = frozenset({"api.openai.com", "api.anthropic.com"})
@@ -1649,6 +1676,10 @@ def copilot_bearer_upstream(
     redirecting it to Copilot can only turn a certain 401 into the request the
     client intended. Anything else — an operator-pinned gateway, an explicit
     per-request ``x-headroom-base-url``, a non-Copilot token — is left alone.
+
+    Callers that go on to merge operator ``*_extra_headers`` must withhold them
+    when this returns a URL: those secrets belong to the configured target, not
+    to the host the request was redirected to.
     """
     if _header_value(headers, "x-headroom-base-url"):
         return None
@@ -1657,7 +1688,7 @@ def copilot_bearer_upstream(
         if host not in _STOCK_PROVIDER_HOSTS:
             return None
     token = _bearer_token(headers)
-    if not token or not token.startswith(_COPILOT_ROUTING_BEARER_PREFIXES):
+    if not token or not _is_copilot_routing_bearer(token):
         return None
     return copilot_api_url()
 

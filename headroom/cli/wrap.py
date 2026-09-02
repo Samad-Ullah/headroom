@@ -5891,6 +5891,10 @@ def copilot(
             env["COPILOT_PROVIDER_BEARER_TOKEN"] = client_bearer
             env["GITHUB_COPILOT_USE_TOKEN_EXCHANGE"] = "false"
             env.pop("COPILOT_PROVIDER_API_KEY", None)
+            # Chat goes through COPILOT_PROVIDER_BASE_URL here; a durable
+            # install's COPILOT_API_URL would send the CLI's ancillary CAPI
+            # calls to a proxy that may not be running.
+            env.pop("COPILOT_API_URL", None)
             _ensure_loopback_no_proxy(env)
             # Hand the exact token we resolved (and, for --subscription, validated
             # against GitHub) to the proxy explicitly via copilot_proxy_token below.

@@ -21,6 +21,7 @@ import pytest
 from click.testing import CliRunner
 
 from headroom import copilot_auth
+from headroom.providers.copilot import wrap as copilot_wrap
 from headroom.providers.copilot.install import build_install_env, install_uses_native_lane
 from headroom.providers.copilot.wrap import (
     COPILOT_NATIVE_API_URL_ENV,
@@ -218,7 +219,18 @@ def test_read_copilot_url_settings_reports_every_pin(tmp_path: Path) -> None:
     assert read_copilot_url_setting(env) == (tmp_path / "settings.json", "https://current.example/")
 
 
-@pytest.mark.parametrize("payload", ["not json", "[]", json.dumps({"copilotUrl": "  "})])
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "not json",
+        "[]",
+        json.dumps({"copilotUrl": "  "}),
+        json.dumps({"copilotUrl": 123}),
+        json.dumps({"copilotUrl": None}),
+        json.dumps({"copilotUrl": ["http://127.0.0.1:1"]}),
+        json.dumps({"copilotUrl": True}),
+    ],
+)
 def test_read_copilot_url_settings_ignores_unusable_files(tmp_path: Path, payload: str) -> None:
     _write(tmp_path / "settings.json", payload)
     assert read_copilot_url_settings({"COPILOT_HOME": str(tmp_path)}) == []
@@ -229,7 +241,10 @@ def test_check_refuses_a_pin_on_another_origin(tmp_path: Path) -> None:
     with pytest.raises(click.ClickException) as excinfo:
         check_copilot_url_setting(PROXY_URL, environ={"COPILOT_HOME": str(tmp_path)})
     assert "copilotUrl" in excinfo.value.message
-    assert PROXY_URL in excinfo.value.message
+    # The remedy names the bare origin, not this launch's project-prefixed URL,
+    # so following it does not pin every future session to one project.
+    assert "'http://127.0.0.1:8787'" in excinfo.value.message
+    assert PROXY_URL not in excinfo.value.message
 
 
 def test_check_refuses_when_only_the_legacy_file_pins_another_origin(tmp_path: Path) -> None:
@@ -259,7 +274,9 @@ def test_check_accepts_the_same_origin_without_the_project_prefix(
     """A durable install wrote the bare proxy URL: traffic still flows through Headroom."""
     _write(tmp_path / "settings.json", {"copilotUrl": "http://127.0.0.1:8787"})
     check_copilot_url_setting(PROXY_URL, environ={"COPILOT_HOME": str(tmp_path)})
-    assert "per-project savings attribution" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert out.startswith("  Note:")
+    assert "copilotUrl='http://127.0.0.1:8787'" in out
 
 
 def test_check_is_silent_without_any_pin(
@@ -339,6 +356,7 @@ def test_install_lane_selection() -> None:
     assert install_uses_native_lane("anyllm", {}) is False
     assert install_uses_native_lane("litellm-vertex", {}) is False
     assert install_uses_native_lane("anthropic", {"COPILOT_PROVIDER_API_KEY": "sk-x"}) is False
+    assert install_uses_native_lane(None, {}) is True  # planner may pass no backend at all
 
 
 def test_native_install_env_is_only_the_api_url_hook() -> None:
@@ -360,7 +378,7 @@ def test_ghe_data_residency_host_is_never_folded_into_the_public_host() -> None:
     )
 
 
-def test_ghe_host_from_a_token_exchange_is_honoured(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ghe_host_from_a_token_exchange_is_honoured() -> None:
     resolved = copilot_auth._api_url_from_exchange_payload(
         {"endpoints": {"api": "https://copilot-api.acme.ghe.com"}}, oauth_token="gho-oauth"
     )
@@ -484,3 +502,103 @@ def test_wrap_stays_quiet_when_the_advertised_host_is_the_one_used(
 
     assert result.exit_code == 0, result.output
     assert copilot_auth.USE_ADVERTISED_HOST_ENV not in result.output
+
+
+# --------------------------------------------------------------------------- #
+# Review follow-ups
+# --------------------------------------------------------------------------- #
+def test_loopback_no_proxy_seeds_uppercase_from_a_lowercase_only_value() -> None:
+    """undici reads ``no_proxy`` first, reqwest and Go read ``NO_PROXY`` first;
+    a fresh uppercase value missing the corporate entries would split them."""
+    env = {"no_proxy": "corp.internal,.example.com"}
+    ensure_loopback_no_proxy(env)
+    assert env["NO_PROXY"] == env["no_proxy"]
+    assert env["NO_PROXY"].split(",")[:2] == ["corp.internal", ".example.com"]
+    assert "127.0.0.1" in env["NO_PROXY"].split(",")
+
+
+def test_loopback_no_proxy_unions_disagreeing_spellings() -> None:
+    env = {"NO_PROXY": "a.internal", "no_proxy": "b.internal"}
+    ensure_loopback_no_proxy(env)
+    assert env["NO_PROXY"] == env["no_proxy"]
+    assert env["NO_PROXY"].split(",")[:2] == ["a.internal", "b.internal"]
+
+
+def test_copilot_home_follows_node_homedir_on_windows() -> None:
+    """Node ignores HOME on Windows; so must the lookup, or a Git-for-Windows
+    shell with HOME set would look in the wrong place and fail open."""
+    env = {"HOME": "/home/from-msys", "USERPROFILE": "C:\\Users\\dev"}
+    assert copilot_home(env, windows=True) == Path("C:\\Users\\dev") / ".copilot"
+    assert copilot_home(env, windows=False) == Path("/home/from-msys") / ".copilot"
+
+
+def _legacy_pkg_root(home: Path, *, mentions_env: bool) -> None:
+    pkg = home / ".local" / "share" / "copilot" / "pkg" / "1.0.60"
+    pkg.mkdir(parents=True)
+    (pkg / "app.js").write_text(
+        "process.env.COPILOT_API_URL" if mentions_env else "nothing", encoding="utf-8"
+    )
+
+
+def test_stale_installer_bundle_cannot_vouch_for_a_launched_build(tmp_path: Path) -> None:
+    """The bundle beside the binary about to run says no; an old installer copy
+    under the legacy root says yes. The launched build decides."""
+    home = tmp_path / "home"
+    _legacy_pkg_root(home, mentions_env=True)
+    shim_link, _native = _npm_layout(tmp_path, mentions_env=False)
+    env = {"HOME": str(home), "LOCALAPPDATA": str(tmp_path / "nowhere")}
+    assert native_api_url_supported(environ=env, copilot_bin=str(shim_link)) is False
+
+
+def test_legacy_root_is_read_from_the_given_environment(tmp_path: Path) -> None:
+    """The probe must not reach for the developer's real home directory."""
+    home = tmp_path / "home"
+    _legacy_pkg_root(home, mentions_env=True)
+    env = {"HOME": str(home), "LOCALAPPDATA": str(tmp_path / "nowhere")}
+    assert native_api_url_supported(environ=env, copilot_bin=None) is True
+    assert native_api_url_supported(environ=_no_legacy_roots(tmp_path), copilot_bin=None) is None
+
+
+def test_bundle_scan_finds_a_mention_that_straddles_a_chunk_boundary(tmp_path: Path) -> None:
+    bundle = tmp_path / "app.js"
+    filler = "x" * ((1 << 20) - 5)  # the needle starts 5 bytes before the first chunk ends
+    bundle.write_text(filler + COPILOT_NATIVE_API_URL_ENV + ";", encoding="utf-8")
+    assert copilot_wrap._bundle_mentions_native_api_url(str(bundle)) is True
+
+
+def test_byok_lane_drops_a_durable_installs_native_hook() -> None:
+    env, _ = build_launch_env(
+        port=8787,
+        provider_type="openai",
+        wire_api=None,
+        environ={COPILOT_NATIVE_API_URL_ENV: "http://127.0.0.1:9999"},
+    )
+    assert COPILOT_NATIVE_API_URL_ENV not in env
+
+
+def test_subscription_lane_drops_a_durable_installs_native_hook_and_prints_the_notice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from headroom.cli import wrap as wrap_mod
+    from headroom.cli.main import main
+
+    captured: dict[str, object] = {}
+    monkeypatch.setenv(COPILOT_NATIVE_API_URL_ENV, "http://127.0.0.1:9999")
+    monkeypatch.setattr(wrap_mod.shutil, "which", lambda _name: "/usr/bin/copilot")
+    monkeypatch.setattr(wrap_mod, "_check_proxy", lambda _port: False)
+    monkeypatch.setattr(
+        wrap_mod,
+        "_require_copilot_subscription_resolution",
+        lambda: _native_resolution("https://api.enterprise.githubcopilot.com"),
+    )
+    monkeypatch.setattr(wrap_mod, "_launch_tool", lambda **kwargs: captured.update(kwargs))
+
+    result = CliRunner().invoke(
+        main, ["wrap", "copilot", "--subscription", "--", "--model", "gpt-5.5"]
+    )
+
+    assert result.exit_code == 0, result.output
+    env = captured["env"]
+    assert isinstance(env, dict)
+    assert COPILOT_NATIVE_API_URL_ENV not in env
+    assert "api.enterprise.githubcopilot.com" in result.output
