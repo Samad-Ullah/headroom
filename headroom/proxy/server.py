@@ -153,7 +153,13 @@ from headroom.proxy.memory_handler import MemoryConfig, MemoryHandler
 
 # Data models (extracted to headroom/proxy/models.py for maintainability)
 from headroom.proxy.model_router import ModelRouter, ModelRouterConfig
-from headroom.proxy.models import CacheEntry, ProxyConfig, RateLimitState, RequestLog  # noqa: F401
+from headroom.proxy.models import (  # noqa: F401
+    CacheEntry,
+    ProxyConfig,
+    RateLimitState,
+    RequestLog,
+    warn_if_max_items_configured,
+)
 from headroom.proxy.modes import (
     PROXY_MODE_CACHE,
     PROXY_MODE_TOKEN,
@@ -5465,6 +5471,19 @@ def _proxy_config_from_env() -> ProxyConfig:
                 from headroom.rollout import RolloutSnapshot
 
                 values["rollout"] = RolloutSnapshot.from_internal_dict(rollout_value)
+            # Drop keys this build no longer has rather than discarding the whole
+            # snapshot. A worker started by a parent of a different generation
+            # (mid-upgrade, or after a field is removed) would otherwise fall all
+            # the way back to env vars and silently lose the parent's config.
+            known = {f.name for f in fields(ProxyConfig)}
+            unknown = sorted(set(values) - known)
+            if unknown:
+                logger.warning(
+                    "Ignoring unknown %s keys from the parent process: %s",
+                    _MULTI_WORKER_CONFIG_ENV,
+                    ", ".join(unknown),
+                )
+                values = {k: v for k, v in values.items() if k in known}
             return ProxyConfig(**values)
         except (KeyError, TypeError, ValueError, json.JSONDecodeError):
             logger.warning(
@@ -6183,12 +6202,13 @@ if __name__ == "__main__":
     # max_items_after_crush was removed: the value never reached the crusher,
     # and the adaptive sizer derives the item count from the content itself.
     # The flag and env var are still accepted so existing scripts do not break.
-    if args.max_items is not None or "HEADROOM_MAX_ITEMS" in os.environ:
+    if args.max_items is not None:
         logger.warning(
-            "--max-items / HEADROOM_MAX_ITEMS is deprecated and ignored. "
-            "SmartCrusher derives how many items to keep from the content; "
-            "use a CompressionProfile bias to lean conservative or aggressive."
+            "--max-items is deprecated and ignored. SmartCrusher derives how many "
+            "items to keep from the content itself; use a CompressionProfile bias "
+            "to lean conservative or aggressive."
         )
+    warn_if_max_items_configured()
 
     # Environment variable defaults (HEADROOM_* prefix)
     # CLI args override env vars, env vars override ProxyConfig defaults

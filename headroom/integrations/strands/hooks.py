@@ -164,7 +164,8 @@ class HeadroomHookProvider(HookProvider):  # type: ignore[misc]
             with self._lock:
                 # Double-check after acquiring lock
                 if self._crusher is None:
-                    # Use config from HeadroomConfig if available
+                    # The crusher takes only min_tokens_to_crush here; how many
+                    # items survive is derived by the adaptive sizer.
                     crusher_config = SmartCrusherConfig(
                         min_tokens_to_crush=self.min_tokens_to_compress
                     )

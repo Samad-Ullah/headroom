@@ -1133,6 +1133,7 @@ def proxy(
     ensure_proxy_dependencies()
 
     # Import here to avoid slow startup
+    from headroom.proxy.models import warn_if_max_items_configured
     from headroom.proxy.server import (
         ProxyConfig,
         _parse_csv_tools,
@@ -1140,6 +1141,8 @@ def proxy(
         _parse_tool_profiles,
         run_server,
     )
+
+    warn_if_max_items_configured()
 
     # Warn if --learn and --no-learn are both set (--no-learn wins, per docstring)
     if learn and no_learn:
