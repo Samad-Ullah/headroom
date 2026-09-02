@@ -1,40 +1,15 @@
-############ .venv  — Python 3.10, onnxruntime 1.23, native detect OFF ############
-onnxruntime 1.23 exposes an older C API than Rust detection requires (1.24+); leaving ORT_DYLIB_PATH unset and using Python detection
-Native content detection requires ONNX Runtime 1.24+; using pure-Python detection for this process.
-python 3.10.12  headroom 0.37.0  onnxruntime 1.23.2  magika 1.0.3  kompress_ready=True
-import: /root/monperus/.venv/lib/python3.10/site-packages/headroom/__init__.py
-
--- detection -> strategy --
-   pytest log   text         conf=0.50 -> CompressionStrategy.TEXT
-   py source    source_code  conf=0.94 -> CompressionStrategy.CODE_AWARE
-   github json  json_array   conf=1.00 -> CompressionStrategy.SMART_CRUSHER
-
--- compress() pipeline --
-   case         arm            before    after   saved  transforms
-   pytest log   default         7,976    7,976    0.0%  ['router:protected:user_message']
-   pytest log   unprotected     7,976    7,976    0.0%  ['router:noop']
-   py source    default         2,691    2,691    0.0%  ['router:protected:user_message']
-   py source    unprotected     2,691    2,691    0.0%  ['router:noop']
-   github json  default        23,319   12,445   46.6%  ['router:protected:user_message', 'router:tool_result:mixed']
-   github json  unprotected    23,319   12,445   46.6%  ['router:tool_result:mixed']
-
--- same payloads, compressors called DIRECTLY --
-   LogCompressor     22,264      909   95.9%  (chars)
-   CodeCompressor    10,775    5,444   49.5%  (chars)
-
-############ .venv313 — Python 3.13, onnxruntime 1.29, native detect ON ############
 python 3.13.15  headroom 0.37.0  onnxruntime 1.29.0  magika 1.0.3  kompress_ready=True
 import: /root/monperus/.venv313/lib/python3.13/site-packages/headroom/__init__.py
 
 -- detection -> strategy --
-   pytest log   text         conf=0.50 -> CompressionStrategy.TEXT
+   pytest log   build        conf=0.98 -> CompressionStrategy.LOG
    py source    source_code  conf=0.94 -> CompressionStrategy.CODE_AWARE
    github json  json_array   conf=1.00 -> CompressionStrategy.SMART_CRUSHER
 
 -- compress() pipeline --
    case         arm            before    after   saved  transforms
-   pytest log   default         7,976    7,976    0.0%  ['router:protected:user_message']
-   pytest log   unprotected     7,976    7,976    0.0%  ['router:noop']
+   pytest log   default         7,976    7,205    9.7%  ['router:protected:user_message', 'router:tool_result:log']
+   pytest log   unprotected     7,976    7,205    9.7%  ['router:tool_result:log']
    py source    default         2,691    2,691    0.0%  ['router:protected:user_message']
    py source    unprotected     2,691    2,691    0.0%  ['router:noop']
    github json  default        23,319   12,445   46.6%  ['router:protected:user_message', 'router:tool_result:mixed']

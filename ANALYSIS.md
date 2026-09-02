@@ -284,17 +284,17 @@ measuring what the tool actually does rather than what its README says.
 uv venv --python 3.13 .venv && uv pip install "headroom-ai[proxy,code,evals,ml]"
 
 # 1. compression matrix, library mode, patched vs baseline detector
-python analysis/experiments/matrix.py              # -> analysis/results/matrix.txt
+python analysis/experiments/matrix.py > analysis/results/matrix.txt
 
 # 2. the cold/warm defect, 2x2 isolation
-python analysis/experiments/fixtest.py             # WARM=0|1 NOSPLIT=0|1
+WARM=1 NOSPLIT=0 python analysis/experiments/fixtest.py   # and the other 3 cells
 
 # 3. detector unit tests
 pytest tests/test_content_detector_test_output.py  # 8 passed
 
 # 4. the coding-agent evaluation (scripted provider, no API key needed)
 python analysis/eval/validate_tasks.py             # 20/20 tasks usable
-python analysis/eval/run_eval.py --mock            # -> records.json
+python analysis/eval/run_eval.py --mock            # writes runs/records.json
 python analysis/eval/analyze.py                    # paired stats + bootstrap CIs
 
 # 4b. the same evaluation against a real model

@@ -1,6 +1,10 @@
-"""Reproducible compression matrix. Run from a NEUTRAL cwd (not the repo root).
+"""Reproducible compression matrix: baseline vs patched detector.
 
-    cd /tmp && python analysis/experiments/matrix.py
+    python analysis/experiments/matrix.py > analysis/results/matrix.txt
+
+Safe to run from any directory: Python puts this script's own directory on
+sys.path rather than the cwd, so the checkout never shadows the installed
+wheel. The assertion below fails loudly if that ever stops being true.
 """
 import pathlib
 import sys, platform, importlib.metadata as md
