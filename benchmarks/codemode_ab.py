@@ -25,64 +25,106 @@ PROJECTS = Path.home() / ".claude" / "projects"
 
 # (id, prompt, ground truth, kind)
 TASKS = [
-    ("ccr_py_count",
-     "How many .py files are directly in headroom/ccr/? Answer with just the number.",
-     "10", "num"),
-    ("max_rounds",
-     "What is the default value of max_retrieval_rounds in ResponseHandlerConfig? Answer with just the number.",
-     "3", "num"),
-    ("plugin_dirs",
-     "How many directories are directly under plugins/? Answer with just the number.",
-     "5", "num"),
-    ("logcompressor_lines",
-     "How many lines are in crates/headroom-core/src/transforms/log_compressor.rs? Answer with just the number.",
-     "1795", "num"),
-    ("openclaw_version",
-     "What version is declared in plugins/openclaw/package.json? Answer with just the version string.",
-     "0.37.0", "exact"),
-    ("test_ccr_files",
-     "How many files directly in tests/ (not in subdirectories) have names starting with test_ccr? Answer with just the number.",
-     "24", "num"),
-    ("crate_names",
-     "List the directory names under crates/ as a comma-separated sorted list, nothing else.",
-     "headroom-core,headroom-parity,headroom-proxy,headroom-py,headroom-simulators", "set"),
-    ("agenthooks_events",
-     "How many distinct hook event names are defined in plugins/headroom-agent-hooks/hooks/hooks.json? Answer with just the number.",
-     "2", "num"),
+    (
+        "ccr_py_count",
+        "How many .py files are directly in headroom/ccr/? Answer with just the number.",
+        "10",
+        "num",
+    ),
+    (
+        "max_rounds",
+        "What is the default value of max_retrieval_rounds in ResponseHandlerConfig? Answer with just the number.",
+        "3",
+        "num",
+    ),
+    (
+        "plugin_dirs",
+        "How many directories are directly under plugins/? Answer with just the number.",
+        "5",
+        "num",
+    ),
+    (
+        "logcompressor_lines",
+        "How many lines are in crates/headroom-core/src/transforms/log_compressor.rs? Answer with just the number.",
+        "1795",
+        "num",
+    ),
+    (
+        "openclaw_version",
+        "What version is declared in plugins/openclaw/package.json? Answer with just the version string.",
+        "0.37.0",
+        "exact",
+    ),
+    (
+        "test_ccr_files",
+        "How many files directly in tests/ (not in subdirectories) have names starting with test_ccr? Answer with just the number.",
+        "24",
+        "num",
+    ),
+    (
+        "crate_names",
+        "List the directory names under crates/ as a comma-separated sorted list, nothing else.",
+        "headroom-core,headroom-parity,headroom-proxy,headroom-py,headroom-simulators",
+        "set",
+    ),
+    (
+        "agenthooks_events",
+        "How many distinct hook event names are defined in plugins/headroom-agent-hooks/hooks/hooks.json? Answer with just the number.",
+        "2",
+        "num",
+    ),
 ]
 
 # Multi-probe suite: each task needs several small independent facts, i.e. the
 # exact shape the directive targets. This measures the CEILING for steering,
 # not a field average -- real observed bursts average 2.6 calls.
 TASKS_MULTI = [
-    ("crate_rs_counts",
-     "For each directory under crates/, report how many .rs files it contains recursively. "
-     "Answer as name=count pairs, comma-separated, sorted by name, nothing else.",
-     "headroom-core=99,headroom-parity=3,headroom-proxy=86,headroom-py=2,headroom-simulators=7", "seq"),
-    ("file_existence",
-     "Do these paths exist? pyproject.toml, uv.lock, Cargo.toml, mkdocs.yml, tsconfig.json. "
-     "Answer as five yes/no values, comma-separated, in that order, nothing else.",
-     "yes,yes,yes,no,no", "seq"),
-    ("dir_counts",
-     "Report three numbers: how many .py files are directly in benchmarks/, how many .md files "
-     "are directly in wiki/, and how many directories are directly under plugins/. "
-     "Answer as three comma-separated numbers in that order, nothing else.",
-     "25,35,5", "seq"),
-    ("ccr_symbols",
-     "In headroom/ccr/, report how many .py files contain the string 'CCR_TOOL_NAME', how many "
-     "contain 'async def', and how many contain 'class '. Answer as three comma-separated numbers "
-     "in that order, nothing else.",
-     "6,5,8", "seq"),
-    ("plugin_versions",
-     "Report the version field from each of: plugins/openclaw/package.json, "
-     "plugins/headroom-agent-hooks/.claude-plugin/plugin.json. "
-     "Answer as two comma-separated version strings in that order, nothing else.",
-     "0.37.0,0.37.0", "seq"),
-    ("line_counts",
-     "Report the line count of each of these files: headroom/ccr/response_handler.py, "
-     "headroom/ccr/tool_injection.py, headroom/ccr/mcp_server.py. "
-     "Answer as three comma-separated numbers in that order, nothing else.",
-     "1095,615,1199", "seq"),
+    (
+        "crate_rs_counts",
+        "For each directory under crates/, report how many .rs files it contains recursively. "
+        "Answer as name=count pairs, comma-separated, sorted by name, nothing else.",
+        "headroom-core=99,headroom-parity=3,headroom-proxy=86,headroom-py=2,headroom-simulators=7",
+        "seq",
+    ),
+    (
+        "file_existence",
+        "Do these paths exist? pyproject.toml, uv.lock, Cargo.toml, mkdocs.yml, tsconfig.json. "
+        "Answer as five yes/no values, comma-separated, in that order, nothing else.",
+        "yes,yes,yes,no,no",
+        "seq",
+    ),
+    (
+        "dir_counts",
+        "Report three numbers: how many .py files are directly in benchmarks/, how many .md files "
+        "are directly in wiki/, and how many directories are directly under plugins/. "
+        "Answer as three comma-separated numbers in that order, nothing else.",
+        "25,35,5",
+        "seq",
+    ),
+    (
+        "ccr_symbols",
+        "In headroom/ccr/, report how many .py files contain the string 'CCR_TOOL_NAME', how many "
+        "contain 'async def', and how many contain 'class '. Answer as three comma-separated numbers "
+        "in that order, nothing else.",
+        "6,5,8",
+        "seq",
+    ),
+    (
+        "plugin_versions",
+        "Report the version field from each of: plugins/openclaw/package.json, "
+        "plugins/headroom-agent-hooks/.claude-plugin/plugin.json. "
+        "Answer as two comma-separated version strings in that order, nothing else.",
+        "0.37.0,0.37.0",
+        "seq",
+    ),
+    (
+        "line_counts",
+        "Report the line count of each of these files: headroom/ccr/response_handler.py, "
+        "headroom/ccr/tool_injection.py, headroom/ccr/mcp_server.py. "
+        "Answer as three comma-separated numbers in that order, nothing else.",
+        "1095,615,1199",
+        "seq",
+    ),
 ]
 
 
@@ -105,7 +147,7 @@ def score(kind: str, truth: str, answer: str) -> bool:
         # first line that has at least that many -- ignores trailing prose
         for line in [a] + a.splitlines():
             got = [t.strip().lower() for t in re.split(r"[,\s]+", line) if t.strip()]
-            if len(got) >= len(want) and got[:len(want)] == want:
+            if len(got) >= len(want) and got[: len(want)] == want:
                 return True
         return False
     if kind == "set":
@@ -139,16 +181,21 @@ def trace(session_id: str) -> dict:
             return x
         if isinstance(x, list):
             return "\n".join(
-                b.get("text", "") if isinstance(b, dict) and b.get("type") == "text"
-                else json.dumps(b) for b in x
+                b.get("text", "")
+                if isinstance(b, dict) and b.get("type") == "text"
+                else json.dumps(b)
+                for b in x
             )
         return json.dumps(x) if x is not None else ""
 
     for d in rows:
         t = d.get("type")
         if t == "assistant":
-            tus = [b for b in (d.get("message") or {}).get("content") or []
-                   if isinstance(b, dict) and b.get("type") == "tool_use"]
+            tus = [
+                b
+                for b in (d.get("message") or {}).get("content") or []
+                if isinstance(b, dict) and b.get("type") == "tool_use"
+            ]
             if tus:
                 run += 1
                 for b in tus:
@@ -165,7 +212,11 @@ def trace(session_id: str) -> dict:
                 run = 0
         elif t in ("user", "attachment"):
             for b in (d.get("message") or {}).get("content") or []:
-                if isinstance(b, dict) and b.get("type") == "tool_result" and b.get("tool_use_id") in pend:
+                if (
+                    isinstance(b, dict)
+                    and b.get("type") == "tool_result"
+                    and b.get("tool_use_id") in pend
+                ):
                     pend.discard(b.get("tool_use_id"))
                     fetched += len(text_of(b.get("content")))
     if run:
@@ -186,8 +237,17 @@ def run_one(task, arm: str, wt: Path, plugin_dir: Path, model: str | None) -> di
     tid, prompt, truth, kind = task
     env = dict(os.environ)
     env["HEADROOM_CODEMODE"] = "1" if arm == "steered" else "0"
-    cmd = ["claude", "-p", prompt, "--output-format", "json",
-           "--permission-mode", "auto", "--plugin-dir", str(plugin_dir)]
+    cmd = [
+        "claude",
+        "-p",
+        prompt,
+        "--output-format",
+        "json",
+        "--permission-mode",
+        "auto",
+        "--plugin-dir",
+        str(plugin_dir),
+    ]
     if model:
         cmd += ["--model", model]
     t0 = time.time()
@@ -196,7 +256,12 @@ def run_one(task, arm: str, wt: Path, plugin_dir: Path, model: str | None) -> di
     try:
         d = json.loads(proc.stdout)
     except Exception:
-        return {"task": tid, "arm": arm, "error": (proc.stdout or proc.stderr)[:300], "wall_s": wall}
+        return {
+            "task": tid,
+            "arm": arm,
+            "error": (proc.stdout or proc.stderr)[:300],
+            "wall_s": wall,
+        }
     u = d.get("usage") or {}
     rec = {
         "task": tid,
@@ -237,18 +302,22 @@ def main() -> int:
     for rep in range(args.reps):
         for task in suite:
             # interleave arms so prompt-cache warmth cannot favour one side
-            for arm in (("steered", "control") if rep % 2 == 0 else ("control", "steered")):
+            for arm in ("steered", "control") if rep % 2 == 0 else ("control", "steered"):
                 if (task[0], arm, rep) in done:
                     continue
                 rec = run_one(task, arm, wt, pd, args.model)
                 rec["rep"] = rep
                 results.append(rec)
                 out.write_text(json.dumps(results, indent=2))
-                print(f"  {task[0]:22s} {arm:8s} rep{rep}  "
-                      f"${rec.get('cost_usd', 0) or 0:.4f}  turns={rec.get('num_turns')}  "
-                      f"calls={rec.get('tool_calls')}  ok={rec.get('correct')}", flush=True)
-                dirty = subprocess.run(["git", "status", "--porcelain"], cwd=wt,
-                                       capture_output=True, text=True).stdout.strip()
+                print(
+                    f"  {task[0]:22s} {arm:8s} rep{rep}  "
+                    f"${rec.get('cost_usd', 0) or 0:.4f}  turns={rec.get('num_turns')}  "
+                    f"calls={rec.get('tool_calls')}  ok={rec.get('correct')}",
+                    flush=True,
+                )
+                dirty = subprocess.run(
+                    ["git", "status", "--porcelain"], cwd=wt, capture_output=True, text=True
+                ).stdout.strip()
                 if dirty:
                     print(f"    !! worktree dirtied, resetting: {dirty[:120]}", flush=True)
                     subprocess.run(["git", "reset", "--hard", "-q"], cwd=wt)
