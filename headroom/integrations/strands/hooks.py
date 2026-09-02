@@ -165,15 +165,9 @@ class HeadroomHookProvider(HookProvider):  # type: ignore[misc]
                 # Double-check after acquiring lock
                 if self._crusher is None:
                     # Use config from HeadroomConfig if available
-                    if self.config and self.config.smart_crusher:
-                        crusher_config = SmartCrusherConfig(
-                            min_tokens_to_crush=self.min_tokens_to_compress,
-                            max_items_after_crush=self.config.smart_crusher.max_items_after_crush,
-                        )
-                    else:
-                        crusher_config = SmartCrusherConfig(
-                            min_tokens_to_crush=self.min_tokens_to_compress
-                        )
+                    crusher_config = SmartCrusherConfig(
+                        min_tokens_to_crush=self.min_tokens_to_compress
+                    )
                     # observer: no proxy here, so nothing else reports these
                     # compressions to the beacon. See BeaconCompressionObserver.
                     self._crusher = SmartCrusher(

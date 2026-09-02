@@ -179,7 +179,6 @@ class ProxyConfig:
     optimize: bool = True
     image_optimize: bool = True
     min_tokens_to_crush: int = 500
-    max_items_after_crush: int = 50
     smart_crusher_with_compaction: bool | None = None
     keep_last_turns: int = 4
 

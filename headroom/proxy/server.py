@@ -855,10 +855,6 @@ class HeadroomProxy(
             prefer_code_aware_for_code=_get_env_bool("HEADROOM_PREFER_CODE_AWARE_FOR_CODE", True),
             tool_profiles=config.tool_profiles,
             read_lifecycle=ReadLifecycleConfig(enabled=config.read_lifecycle),
-            smart_crusher_max_items_after_crush=cast(
-                int | None,
-                profile_kwargs.get("max_items_after_crush"),
-            ),
             smart_crusher_with_compaction=cast(
                 bool,
                 profile_kwargs.get("smart_crusher_with_compaction", True),
@@ -3329,10 +3325,6 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
                     "min_tokens_to_compress",
                     config.min_tokens_to_crush,
                 ),
-                "max_items_after_crush": profile_kwargs.get(
-                    "max_items_after_crush",
-                    config.max_items_after_crush,
-                ),
                 "smart_crusher_with_compaction": profile_kwargs.get(
                     "smart_crusher_with_compaction",
                     config.smart_crusher_with_compaction,
@@ -4674,9 +4666,6 @@ def create_app(config: ProxyConfig | None = None) -> FastAPI:
             "protect_analysis_context": config.protect_analysis_context,
             "min_tokens_to_crush": profile_kwargs.get(
                 "min_tokens_to_compress", config.min_tokens_to_crush
-            ),
-            "max_items_after_crush": profile_kwargs.get(
-                "max_items_after_crush", config.max_items_after_crush
             ),
             "smart_crusher_with_compaction": profile_kwargs.get(
                 "smart_crusher_with_compaction",
@@ -6023,7 +6012,12 @@ if __name__ == "__main__":
     # Optimization
     parser.add_argument("--no-optimize", action="store_true", help="Disable optimization")
     parser.add_argument("--min-tokens", type=int, default=500, help="Min tokens to crush")
-    parser.add_argument("--max-items", type=int, default=50, help="Max items after crush")
+    parser.add_argument(
+        "--max-items",
+        type=int,
+        default=None,
+        help="Deprecated and ignored. Item count is derived by the adaptive sizer.",
+    )
     parser.add_argument(
         "--tool-profile",
         action="append",
@@ -6186,6 +6180,16 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
+    # max_items_after_crush was removed: the value never reached the crusher,
+    # and the adaptive sizer derives the item count from the content itself.
+    # The flag and env var are still accepted so existing scripts do not break.
+    if args.max_items is not None or "HEADROOM_MAX_ITEMS" in os.environ:
+        logger.warning(
+            "--max-items / HEADROOM_MAX_ITEMS is deprecated and ignored. "
+            "SmartCrusher derives how many items to keep from the content; "
+            "use a CompressionProfile bias to lean conservative or aggressive."
+        )
+
     # Environment variable defaults (HEADROOM_* prefix)
     # CLI args override env vars, env vars override ProxyConfig defaults
     env_code_aware = _get_env_bool("HEADROOM_CODE_AWARE_ENABLED", True)
@@ -6267,7 +6271,6 @@ if __name__ == "__main__":
         anyllm_provider=_get_env_str("HEADROOM_ANYLLM_PROVIDER", args.anyllm_provider),
         optimize=optimize,
         min_tokens_to_crush=_get_env_int("HEADROOM_MIN_TOKENS", args.min_tokens),
-        max_items_after_crush=_get_env_int("HEADROOM_MAX_ITEMS", args.max_items),
         smart_crusher_with_compaction=(
             _get_env_bool("HEADROOM_SMART_CRUSHER_COMPACTION", False)
             if "HEADROOM_SMART_CRUSHER_COMPACTION" in os.environ
