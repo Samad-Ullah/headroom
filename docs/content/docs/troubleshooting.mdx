@@ -150,7 +150,7 @@ config.smart_crusher.min_tokens_to_crush = 100  # Default is 200
 
 **Where the savings show up**: Look at the **Prefix Cache Impact** panel and the **Compression vs Cache** tile on the dashboard — these reflect cache-read savings rather than per-request compression. The headline "Tokens Saved" tile only counts compression, so in cache mode it understates the real benefit.
 
-**To get 0.27.0-style compression numbers back**: run the proxy in token mode, which prioritizes visible compression:
+**To get 0.27.0-style compression numbers back**: run the proxy in token mode, which prioritizes visible compression. Use this to compare or diagnose, not as a permanent setting — `cache` is the default because prefix-cache stability is usually worth more on a real agent workload than a larger headline compression number:
 
 ```bash
 # Per run

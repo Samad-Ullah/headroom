@@ -24,9 +24,14 @@ console.log(`Saved ${result.tokensSaved} tokens (${((1 - result.compressionRatio
 <Tab value="Python">
 ```python
 from headroom import compress
+from openai import OpenAI
+
+messages = [{"role": "user", "content": "Analyze these results"}]
 
 result = compress(messages, model="gpt-4o")
-response = client.messages.create(
+
+client = OpenAI()
+response = client.chat.completions.create(
     model="gpt-4o",
     messages=result.messages,
 )

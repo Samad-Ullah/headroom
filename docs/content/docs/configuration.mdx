@@ -31,7 +31,7 @@ These modes apply to SDK usage via `HeadroomClient(default_mode=...)` or per-req
 | `optimize` | Applies safe, deterministic transforms | Production optimization |
 | `simulate` | Returns plan without API call | Testing, cost estimation |
 
-> **Proxy `--mode` is a separate axis**: `headroom proxy --mode token` (maximize compression) or `--mode cache` (freeze prior turns for prefix-cache stability). The proxy does not accept `audit`, `optimize`, or `simulate`.
+> **Proxy `--mode` is a separate axis**: `--mode cache` (the default) freezes prior turns so the provider's prefix cache is never busted, which is where the savings come from on a real agent workload. `--mode token` maximizes visible per-request compression at the cost of cache stability; prefer `cache` unless you are specifically diagnosing compression numbers. The proxy does not accept `audit`, `optimize`, or `simulate`.
 
 ## SDK Configuration
 
@@ -295,7 +295,7 @@ If the upstream base URL itself must vary per request, use the `x-headroom-base-
 headroom proxy \
   --port 8787 \              # Port to listen on
   --host 0.0.0.0 \           # Host to bind to
-  --mode token \             # token compression mode; use cache for prefix-cache stability
+  --mode cache \             # default; freezes prior turns for prefix-cache stability
   --budget 10.00 \           # Daily budget limit in USD
   --log-file headroom.jsonl  # Log file path
 ```
