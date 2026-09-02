@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, WebSocket
 from fastapi.responses import Response
 
+from headroom.copilot_auth import copilot_bearer_upstream as _copilot_bearer_upstream
 from headroom.providers.cloudcode import normalize_cloudcode_passthrough_path
 from headroom.providers.codex.endpoints import codex_backend_url
 from headroom.providers.codex.headers import drop_header
@@ -273,6 +274,14 @@ def register_provider_routes(app: FastAPI, proxy: Any) -> None:
             return await proxy.handle_anthropic_messages(
                 request, upstream_base_url=custom_base.rstrip("/")
             )
+        # Claude models on Copilot travel this route with GitHub's bearer token.
+        # On a shared proxy whose Anthropic target is the stock host that token
+        # cannot succeed; hand the handler the Copilot base the same way a
+        # per-request override would, so auth, `/v1` handling and provider
+        # labelling all follow the existing Copilot path.
+        copilot_base = _copilot_bearer_upstream(dict(request.headers), proxy.ANTHROPIC_API_URL)
+        if copilot_base is not None:
+            return await proxy.handle_anthropic_messages(request, upstream_base_url=copilot_base)
         return await proxy.handle_anthropic_messages(request)
 
     @app.post("/anthropic/v1/messages")

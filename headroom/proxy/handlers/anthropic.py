@@ -29,7 +29,11 @@ import httpx
 from headroom.agent_savings import proxy_pipeline_kwargs
 from headroom.ccr.context_tracker import looks_like_claude_code_compact_summary
 from headroom.ccr.marker_resolution import resolve_markers_in_response
-from headroom.copilot_auth import apply_copilot_api_auth, build_copilot_upstream_url
+from headroom.copilot_auth import (
+    apply_copilot_api_auth,
+    build_copilot_upstream_url,
+    is_copilot_api_url,
+)
 from headroom.pipeline import PipelineStage, summarize_routing_markers
 from headroom.proxy.auth_mode import (
     classify_auth_mode,
@@ -3275,6 +3279,10 @@ class AnthropicHandlerMixin:
                             not upstream_base_url
                             or getattr(self, "anthropic_backend", None) is not None
                             or _is_googleapis_endpoint(upstream_base_url)
+                            # Copilot's Anthropic surface enforces Anthropic's
+                            # wire contract; a redirected request must get the
+                            # same model-aware relocation as a configured one.
+                            or is_copilot_api_url(upstream_base_url)
                         )
                         else None
                     ),
