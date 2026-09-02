@@ -96,7 +96,16 @@ Async agents work too — the wrapped tool exposes a coroutine, so `await agent.
 
 ## LangGraph compression node
 
-Wrapping tools compresses each tool's own return value. Compressing at the graph level instead lets Headroom see every `ToolMessage` in state at once, which usually removes more.
+Wrapping tools and compressing in the graph are not equivalent, and the difference is large. On the same 300-row JSON result:
+
+| Path | Result | Saved |
+|---|---:|---:|
+| `wrap_tools_with_headroom` | 38,395 chars | 10% |
+| `create_compress_tool_messages_node` | 18,390 chars | 57% |
+
+The tool wrapper routes through the MCP compressor, which deliberately keeps its output parseable as JSON for downstream tool consumers. That rules out the schema-hoisting rewrite — the one that turns 300 repeated objects into a single schema line plus CSV rows — so on an array of similar records it mostly removes whitespace. The graph node has no such constraint, because the value only has to be read by the model.
+
+Use the graph node when the output is going to the model and nothing else parses it. Use tool wrapping when something downstream still needs JSON.
 
 ```python
 from langgraph.graph import StateGraph, MessagesState, START, END
