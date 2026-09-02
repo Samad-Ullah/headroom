@@ -1,0 +1,47 @@
+tasks=20  arms=['none', 'headroom-baseline', 'headroom-extension']
+
+arm                      mean ptok    median   solved  turns  unserviced
+--------------------------------------------------------------------------
+none                        25,938    25,919   20/20     4.0           0
+headroom-baseline           25,696    25,910   20/20     4.0           0
+headroom-extension           5,600     3,486   20/20     4.0           0
+
+Paired reduction vs 'none' (per task, then bootstrapped)
+--------------------------------------------------------------------------
+arm                     mean saved               95% CI   tasks improved
+headroom-baseline             0.9%          [-0.0, 2.3]          2/20   
+headroom-extension           78.4%         [65.9, 86.7]         19/20   
+
+Per-task detail — headroom-extension
+--------------------------------------------------------------------------
+  off_by_one_range        26,089 ->  26,072     0.1%   <-- NOT COMPRESSED
+  comparison_flip         25,862 ->  23,555     8.9%   <-- NOT COMPRESSED
+  float_div               25,924 ->   3,530    86.4%
+  min_max_swap            25,913 ->   3,519    86.4%
+  truthy_zero             25,882 ->   3,489    86.5%
+  wrong_accumulator       25,907 ->   3,488    86.5%
+  wrong_rounding          25,948 ->   3,492    86.5%
+  percent_scale           25,904 ->   3,486    86.5%
+  join_sep                25,922 ->   3,487    86.5%
+  strip_chars             25,924 ->   3,486    86.6%
+  bad_default             25,858 ->   3,476    86.6%
+  keys_vs_values          26,045 ->   3,500    86.6%
+  reverse_sort            26,059 ->   3,488    86.6%
+  index_start             25,871 ->   3,458    86.6%
+  empty_default           25,995 ->   3,469    86.7%
+  missing_abs             25,852 ->   3,443    86.7%
+  operator_flip           25,959 ->   3,453    86.7%
+  string_case             25,916 ->   3,425    86.8%
+  inverted_guard          25,870 ->   3,379    86.9%
+  off_by_one              26,067 ->   3,313    87.3%
+
+Bimodality split (headroom-extension)
+------------------------------------------------------------
+  compressed     : 18/20 tasks, median saving 86.6%
+  not compressed :  2/20 tasks -> ['comparison_flip', 'off_by_one_range']
+
+Totals across all 20 tasks (prompt tokens billed)
+------------------------------------------------------------
+  none                   518,767  (  0.0% vs control)
+  headroom-baseline      513,911  (  0.9% vs control)
+  headroom-extension     112,008  ( 78.4% vs control)

@@ -1,0 +1,322 @@
+[
+  {
+    "task_id": "strip_chars",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3582,
+    "completion_tokens": 1133,
+    "wall_seconds": 3.23,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "reverse_sort",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3591,
+    "completion_tokens": 1131,
+    "wall_seconds": 2.19,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "float_div",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3537,
+    "completion_tokens": 1131,
+    "wall_seconds": 2.48,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "keys_vs_values",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3479,
+    "completion_tokens": 1129,
+    "wall_seconds": 2.43,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "join_sep",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3487,
+    "completion_tokens": 1133,
+    "wall_seconds": 2.35,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "truthy_zero",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3489,
+    "completion_tokens": 1130,
+    "wall_seconds": 2.47,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "min_max_swap",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3517,
+    "completion_tokens": 1131,
+    "wall_seconds": 2.42,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "index_start",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3471,
+    "completion_tokens": 1132,
+    "wall_seconds": 2.42,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "empty_default",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3451,
+    "completion_tokens": 1129,
+    "wall_seconds": 2.42,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "percent_scale",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3501,
+    "completion_tokens": 1133,
+    "wall_seconds": 2.45,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "missing_abs",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3455,
+    "completion_tokens": 1132,
+    "wall_seconds": 2.4,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "string_case",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3428,
+    "completion_tokens": 1128,
+    "wall_seconds": 2.37,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "wrong_accumulator",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3482,
+    "completion_tokens": 1131,
+    "wall_seconds": 2.42,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "comparison_flip",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 23555,
+    "completion_tokens": 1130,
+    "wall_seconds": 6.02,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "off_by_one_range",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 26071,
+    "completion_tokens": 1130,
+    "wall_seconds": 1.91,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "bad_default",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3482,
+    "completion_tokens": 1132,
+    "wall_seconds": 2.47,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "wrong_rounding",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3484,
+    "completion_tokens": 1130,
+    "wall_seconds": 2.66,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "inverted_guard",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3372,
+    "completion_tokens": 1129,
+    "wall_seconds": 2.62,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "operator_flip",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3375,
+    "completion_tokens": 1126,
+    "wall_seconds": 2.44,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  },
+  {
+    "task_id": "off_by_one",
+    "arm": "headroom-extension",
+    "solved": true,
+    "turns": 4,
+    "prompt_tokens": 3261,
+    "completion_tokens": 1129,
+    "wall_seconds": 2.22,
+    "unserviced_tool_calls": 0,
+    "error": null,
+    "tool_calls": [
+      "run_tests",
+      "read_file",
+      "write_file"
+    ]
+  }
+]

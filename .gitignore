@@ -270,3 +270,6 @@ uv.lock
 .tokensave
 
 .codebase-memory/
+
+# analysis harness scratch output
+analysis/results/eval-run/

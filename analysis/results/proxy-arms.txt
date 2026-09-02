@@ -1,0 +1,29 @@
+# Proxy vs library — identical fixtures, identical message shapes
+# repo @ 1390d897155e69f8b4554eed5641c2e523860d0f | headroom-ai 0.37.0 | Python 3.13.15
+# 'forwarded' = tokens the upstream mock ACTUALLY received. Semantic cache disabled (--no-cache).
+
+== ARM 1: library mode — compress(), defaults ==
+   case         arm            before    after   saved  transforms
+   pytest log   default         7,976    7,976    0.0%  ['router:protected:user_message']
+   py source    default         2,691    2,691    0.0%  ['router:protected:user_message']
+   github json  default        23,319   12,445   46.6%  ['router:protected:user_message', 'router:tool_result:mixed']
+
+== ARM 2: proxy DEFAULT (--mode cache), code-aware ENABLED by proxy ==
+case                sent  forwarded    saved
+----------------------------------------------
+pytest log         7,893      7,893     0.0%
+py source          2,580      2,580     0.0%
+github json       23,239     23,239     0.0%
+----------------------------------------------
+TOTAL             33,712     33,712     0.0%
+
+
+== ARM 3: proxy --mode token --code-aware ==
+case                sent  forwarded    saved
+----------------------------------------------
+pytest log         7,893      7,893     0.0%
+py source          2,580      1,442    44.1%
+github json       23,239     12,364    46.8%
+----------------------------------------------
+TOTAL             33,712     21,699    35.6%
+

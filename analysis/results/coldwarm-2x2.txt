@@ -1,0 +1,19 @@
+# Cold/warm anomaly — 2x2 causal isolation
+# repo @ 1390d89 + feat/test-output-detection (566b0bc), headroom-ai 0.37.0, Python 3.13.15
+# Payload: 400-pass/1-fail pytest log. Deterministic: 6/6 warm, 4/4 cold reruns identical.
+
+  warm=0 relevance_split_disabled=0  7,968->380 ( 95.2%)  block=909ch
+  warm=0 relevance_split_disabled=1  7,968->380 ( 95.2%)  block=909ch
+  warm=1 relevance_split_disabled=0  7,968->7,197 (  9.7%)  block=20,570ch
+  warm=1 relevance_split_disabled=1  7,968->380 ( 95.2%)  block=909ch
+
+# Instrumented call trace (signature-safe spies):
+warm=0  result 7968->380  (95.2%)
+    ('_lossless_first', 'in', 22264, 'out', (22264, None))
+    ('_try_ml_compressor', 'in', 22264, 'out', (22264, 5566))
+    ('_relevance_split_compress', 'in', 22264, 'out', None)
+    ('_try_external_compressor', 'in', 22264, 'out', None)
+warm=1  result 7968->7197  (9.7%)
+    ('_lossless_first', 'in', 22264, 'out', (22264, None))
+    ('_try_ml_compressor', 'in', 22264, 'out', (20570, 1354))
+    ('_relevance_split_compress', 'in', 22264, 'out', 20570)
