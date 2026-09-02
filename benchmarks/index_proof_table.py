@@ -24,9 +24,6 @@ from __future__ import annotations
 import argparse
 import json
 
-from headroom import CompressConfig, compress
-from headroom.providers.openai_compatible import OpenAICompatibleTokenCounter
-
 from real_world_agent_benchmark import (  # noqa: E402
     DEFAULT_SEED,
     create_codebase_exploration_scenario,
@@ -35,6 +32,9 @@ from real_world_agent_benchmark import (  # noqa: E402
     generate_github_code_search,
     seed_everything,
 )
+
+from headroom import CompressConfig, compress
+from headroom.providers.openai_compatible import OpenAICompatibleTokenCounter
 
 MODEL = "gpt-5.6"
 
@@ -98,23 +98,22 @@ def main() -> int:
 
     # Built in a fixed order: every generator draws from the same global RNG,
     # so re-ordering these lines changes every number below.
-    print(f"seed={args.seed}  model={MODEL}  "
-          f"tokenizer={type(tok._tokenizer).__name__}")
+    print(f"seed={args.seed}  model={MODEL}  tokenizer={type(tok._tokenizer).__name__}")
 
     out: dict[str, list[dict]] = {}
     for cname, cfg in configs.items():
         # Reseed per configuration so both see a byte-identical corpus.
         seed_everything(args.seed)
         rows = [
-            measure("Code search (100 results)",
-                    [generate_github_code_search("JWT authentication middleware",
-                                                 num_results=100)], tok, cfg),
-            measure("SRE incident debugging",
-                    create_sre_debugging_scenario().tools, tok, cfg),
-            measure("Codebase exploration",
-                    create_codebase_exploration_scenario().tools, tok, cfg),
-            measure("GitHub issue triage",
-                    create_issue_triage_scenario().tools, tok, cfg),
+            measure(
+                "Code search (100 results)",
+                [generate_github_code_search("JWT authentication middleware", num_results=100)],
+                tok,
+                cfg,
+            ),
+            measure("SRE incident debugging", create_sre_debugging_scenario().tools, tok, cfg),
+            measure("Codebase exploration", create_codebase_exploration_scenario().tools, tok, cfg),
+            measure("GitHub issue triage", create_issue_triage_scenario().tools, tok, cfg),
         ]
         out[cname] = rows
 
@@ -122,20 +121,25 @@ def main() -> int:
         print(f"{'Scenario':<30} {'Before':>10} {'After':>10} {'Savings':>9}")
         print("-" * 62)
         for r in rows:
-            print(f"{r['scenario']:<30} {r['before']:>10,} {r['after']:>10,} "
-                  f"{r['savings_pct']:>8.0f}%")
+            print(
+                f"{r['scenario']:<30} {r['before']:>10,} {r['after']:>10,} "
+                f"{r['savings_pct']:>8.0f}%"
+            )
         tb = sum(r["before"] for r in rows)
         ta = sum(r["after"] for r in rows)
         print("-" * 62)
         print(f"{'TOTAL':<30} {tb:>10,} {ta:>10,} {(tb - ta) / tb * 100:>8.0f}%")
 
-    print("\n\nMarkdown for docs/content/docs/index.mdx "
-          "(full-corpus config, which must be stated on the page):\n")
+    print(
+        "\n\nMarkdown for docs/content/docs/index.mdx "
+        "(full-corpus config, which must be stated on the page):\n"
+    )
     print("| Scenario | Before | After | Savings |")
     print("|---|---|---|---|")
     for r in out["full corpus (protect_recent=0)"]:
-        print(f"| {r['scenario']} | {r['before']:,} | {r['after']:,} | "
-              f"**{r['savings_pct']:.0f}%** |")
+        print(
+            f"| {r['scenario']} | {r['before']:,} | {r['after']:,} | **{r['savings_pct']:.0f}%** |"
+        )
     return 0
 
 
